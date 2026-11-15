@@ -20,6 +20,23 @@
   python:、镜像预装 catalog、hostd 常驻、install.sh 补齐）；**#2 idle-stop 主体**（v0.4.62
   已修，本轮 #8 修复补齐其遗留的计数单位问题）。
 
+## [0.4.72] - 2026-11-15
+
+> 社区反馈修复：idle-stop 同轮并发跳档（#8）、全量验证协议补方法面与 sink 审计（#9）。
+
+### 修复（社区反馈）
+
+- **#8 idle-stop 同轮并发跳档终结**：同轮并发的其余 tool_use 一律落在提示档，
+  prevent 收场要求 nudge 之后至少推进过一轮工具执行——worker 不再没机会写回就被终结。
+- **#9 方法面枚举与 sink 审计**（协议「八、方法面与 sink 审计」）：405 即换方法提示；
+  upload/read handler 的 fileName→sink 追踪；防过早收敛纪律。
+
+### 说明
+
+- **#6 Docker 工具检测失效**已随 v0.4.69–0.4.71 修复并发布（Detect any:/python:、
+  镜像预装 catalog、hostd 常驻、install.sh 补齐）；**#2 idle-stop 主体**v0.4.62 已修，
+  本版本补齐其遗留的计数单位问题。
+
 
 ## [0.4.71] - 2026-11-15
 
