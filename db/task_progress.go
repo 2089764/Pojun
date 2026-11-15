@@ -87,3 +87,12 @@ SELECT COUNT(*) FILTER (WHERE kind='fact'), COUNT(*) FILTER (WHERE kind='finding
 FROM exploration_nodes WHERE exploration_id=$1`, expID).Scan(&facts, &findings)
 	return
 }
+
+// ResetPlannerRoundForRevival 把任务的规划轮号归零（终态复活专用）。
+// 内存里的 plannerRound 已在复活时清零；若 task_progress.round_no 仍是上一世的值
+// （例如 80），RecordTaskProgress 的 round_no<=旧值 守卫会让 idle_rounds 一直停在 0，
+// auto_idle/auto_coverage 对复活任务静默失效一整个旧预算周期。
+func (d *DB) ResetPlannerRoundForRevival(taskID string) error {
+	_, err := d.Exec(`UPDATE task_progress SET round_no = 0 WHERE task_id = $1`, taskID)
+	return err
+}

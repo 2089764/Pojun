@@ -749,7 +749,8 @@ type scopeBaseline struct {
 // 显式登记的目标）。auto 行本身不参与，避免自动扩进来的资产自我合法化。
 func (s *AssetStore) loadScopeBaseline(taskID int64) scopeBaseline {
 	var b scopeBaseline
-	rows, err := s.db.Query(`SELECT kind, COALESCE(domain,''), COALESCE(net::text,'') FROM task_scope WHERE task_id=$1 AND source <> 'auto'`, taskID)
+	rows, err := s.db.Query(`SELECT kind, COALESCE(domain,''), COALESCE(net::text,'') FROM task_scope
+WHERE task_id=$1 AND (source <> 'auto' OR kind = 'company')`, taskID)
 	if err != nil {
 		return b
 	}
@@ -819,10 +820,14 @@ func (s *AssetStore) autoScopeAllowed(taskID int64, assetType, domain, rawURL, i
 		if h := strings.TrimSpace(ipText); h != "" {
 			return s.loadScopeBaseline(taskID).allowsIP(h)
 		}
-		return false
+		// IP-only 的 service/endpoint（domain/url 都空）：无基线网段时按旧语义放行
+		//（与 AddAutoScope 的 ipToHostCIDR 兜底一致），有网段则要求命中。
+		return s.loadScopeBaseline(taskID).allowsIP(ipText)
 	}
 	if host == "" {
-		return false
+		// 域名/IP 都为空：有显式 IP 时仍走网段判定（service/endpoint 常见形态），
+		// 否则拒绝（什么都不知道的资产不该进范围）。
+		return s.loadScopeBaseline(taskID).allowsIP(ipText)
 	}
 	// 黑名单按可注册域匹配：play.min.io 命中 min.io。
 	root, _ := RootDomain(host)

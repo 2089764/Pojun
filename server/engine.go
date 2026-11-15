@@ -1177,6 +1177,11 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 				if won, err := e.m.SetTaskStatusGuarded(t.ID, "done"); err != nil {
 					log.Printf("[goalless] task %s 收尾落 done 失败: %v", t.ID, err)
 				} else if won {
+					// 落 done 也是终态：后台作业（job_start 起的长扫描）不该在授权窗口
+					// 外继续打目标。goalless 分支不走 settleTaskWithReason，必须单独清理。
+					if n := agent.KillJobsForTaskDir(filepath.Join(e.m.dir, "tasks", t.ID)); n > 0 {
+						log.Printf("[goalless] task %s 落 done 时清理后台作业 %d 个", t.ID, n)
+					}
 					e.emitActivity(t, db.Activity{Worker: "system", Kind: "text",
 						Summary: "目标已全部达成，直投意图已执行完毕，任务结束"})
 				}

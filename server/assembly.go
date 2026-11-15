@@ -306,13 +306,6 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 	if err := pg.AddAgentToToolBinding("reporter", []string{"list_artifacts"}); err != nil {
 		log.Printf("[tools] reporter 绑定 list_artifacts 失败: %v", err)
 	}
-	// evidence_check（v0.4.71）老库补绑：SeedTool 只插不改，存量的 reporter/retester/
-	// pentest/mainagent 行不会自动获得新工具的 agent 绑定；AddAgentToToolBinding 幂等。
-	for _, agentKey := range []string{"pentest", "retester", "reporter", "mainagent"} {
-		if err := pg.AddAgentToToolBinding(agentKey, []string{"evidence_check"}); err != nil {
-			log.Printf("[tools] %s 绑定 evidence_check 失败: %v", agentKey, err)
-		}
-	}
 	// Seed the built-in domain tools (first-insert only; DO NOTHING preserves edits).
 	// No startup prune: rows we didn't seed are left alone so future user-defined
 	// custom tools (system=false, added via the UI) survive restarts.
@@ -333,6 +326,13 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 					log.Printf("[tools] 补种 %s.%s 失败: %v", s.Key, name, err)
 				}
 			}
+		}
+	}
+	// evidence_check（v0.4.71）老库补绑：必须在 SeedTool **之后**——新库首启时行尚不存在，
+	// 提前跑 UPDATE 匹配 0 行，mainagent/pentest/reporter/retester 就拿不到该工具。
+	for _, agentKey := range []string{"pentest", "retester", "reporter", "mainagent"} {
+		if err := pg.AddAgentToToolBinding(agentKey, []string{"evidence_check"}); err != nil {
+			log.Printf("[tools] %s 绑定 evidence_check 失败: %v", agentKey, err)
 		}
 	}
 	// Seed the traffic host tools so they're bindable per-agent like built-ins.

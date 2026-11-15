@@ -531,6 +531,11 @@ func readResponseFile(workDir, p string) (string, int, error) {
 		}
 		full = filepath.Join(workDir, p)
 	}
+	// 先 Stat 判类型再打开：open(2) 一个无写端的 FIFO 会阻塞到有写端出现，
+	// Stat 永远执行不到——防挂死的检查必须发生在打开之前。
+	if st, err := os.Stat(full); err == nil && !st.Mode().IsRegular() {
+		return "", 0, fmt.Errorf("%q 不是普通文件，拒绝读取", p)
+	}
 	f, err := os.Open(full)
 	if err != nil {
 		return "", 0, err
@@ -540,8 +545,6 @@ func readResponseFile(workDir, p string) (string, int, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	// 只读普通文件且有上限：/dev/zero、FIFO、几 GB 日志会让服务进程无界读取 OOM/挂死，
-	// 所有任务一起受影响（同包 readJobLog 的环形缓冲就是为此）。
 	if !st.Mode().IsRegular() {
 		return "", 0, fmt.Errorf("%q 不是普通文件，拒绝读取", p)
 	}

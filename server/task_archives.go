@@ -142,6 +142,10 @@ func (s *Server) archiveTask(job *pgdb.TaskArchive) (runErr error) {
 		return pgdb.ErrTaskArchiveNotFound
 	}
 	_ = s.m.pg.UpdateTaskArchiveProgress(job.ID, "stage_files", 10)
+	// 归档会把任务目录 rename 走，先收掉还在跑的后台作业。
+	if n := agent.KillJobsForTaskDir(filepath.Join(s.m.dir, "tasks", taskID)); n > 0 {
+		log.Printf("[archive] task %s 归档前清理后台作业 %d 个", taskID, n)
+	}
 	fileStage, err := stageTaskArchiveFiles(s.m.dir, job.ID, taskID, task.ExplorationID)
 	if err != nil {
 		return err

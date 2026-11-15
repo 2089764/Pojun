@@ -1830,6 +1830,11 @@ func (m *Manager) DeleteTask(id string, opts DeleteTaskOptions) (DeleteTaskResul
 		return result, nil
 	}
 
+	// 作业清理必须在 staging（rename 工作区）**之前**：目录被移走后
+	// KillJobsForTaskDir 读不到 shared/jobs，正在跑的扫描会成为无主进程。
+	if n := agent.KillJobsForTaskDir(filepath.Join(m.dir, "tasks", id)); n > 0 {
+		log.Printf("[delete] task %s 删除前清理后台作业 %d 个", id, n)
+	}
 	var fileStage *taskFileDeleteStage
 	if opts.DeleteFiles {
 		fileStage, err = stageTaskFiles(m.dir, id, registered.ExplorationID)

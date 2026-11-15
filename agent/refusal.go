@@ -111,7 +111,9 @@ func (g *refusalGuard) Complete(ctx context.Context, req llm.CompletionRequest) 
 		log.Printf("[llm] 检测到%s拒答，第 %d/%d 次按「授权+技术产出」表述重试", refusalKindLabel(kind), attempt, g.retries)
 		msg2, text2, usage2, err2 := g.inner.Complete(ctx, reframed(req, attempt))
 		if err2 != nil {
-			return msg, text, usage, err
+			// 重试失败要透传 err2：返回旧的 err（必为 nil）会让引擎当成成功拿到拒答文本，
+			// 不触发 model_error/配额分支（与 Stream 路径透传错误的行为不一致）。
+			return msg, text, usage, err2
 		}
 		msg, text, usage = msg2, text2, usage2
 	}

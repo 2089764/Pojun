@@ -205,8 +205,6 @@ func (t *ToolSet) jobStart() actool.CoreTool {
 			// 作业跨 run 存活：用后台 Wait 收尸，不能 Release——Release 不回收子进程，
 			// 每个作业会留一个僵尸，长期运行把容器 pids limit 占满（此后所有 exec 都失败）。
 			go func() { _ = cmd.Wait() }()
-			// 不 Wait：作业跨 run 存活。父进程退出后由 init 收尸（生产为 systemd 常驻进程）。
-			_ = cmd.Process.Release()
 			m := jobMeta{
 				Name: name, Command: a.Command, PID: pid,
 				Started: time.Now().Format(time.RFC3339),

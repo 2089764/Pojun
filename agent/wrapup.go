@@ -104,6 +104,12 @@ func settlementDisabledTools() []string {
 	out = append(out,
 		"Monitor", // SDK 后台任务：能跑 shell
 		"shell_open", "shell_exec", "shell_input", "shell_close", "shell_list", "shell_write",
+		// 绕过 Bash 的执行/触目标工具（注释里点名的都要真隐藏）：
+		"job_start", "job_stop", "job_status", "job_output",
+		"http_request", "session_login", "session_request",
+		"listener_start", "listener_stop", "listener_sessions",
+		"payment_probe", "payment_verify",
+		"run_script", "poc_scaffold", "http_probe", "diff_responses",
 	)
 	sort.Strings(out)
 	return out

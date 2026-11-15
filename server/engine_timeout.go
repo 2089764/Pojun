@@ -121,6 +121,12 @@ func (e *Engine) resetTerminalRevival(taskID string) {
 	// plannerRound 是进程内累计计数器；复活任务若不清零，auto_finish_max_rounds
 	// 会在复活第一轮立刻再次触发，把人工跟进秒收掉。
 	e.plannerRound.Delete(taskID)
+	// task_progress.round_no 是上一世的规划轮号：复活后内存计数从 1 重新起，
+	// 若不把它一并归零，RecordTaskProgress 的 round_no<=旧值 守卫会让 idle_rounds
+	// 一直停在 0，auto_idle/auto_coverage 对复活任务静默失效一整个旧预算周期。
+	if err := e.m.pg.ResetPlannerRoundForRevival(taskID); err != nil {
+		log.Printf("[revival] task %s 重置 planner round 失败: %v", taskID, err)
+	}
 }
 
 // stampFirstRun records first_run_at + deadline_at on the FIRST real run (LLM ready)
