@@ -118,6 +118,12 @@ type idleStopper struct {
 	// 下一次才真收场。跟 idleStopHooks.nudged 是同一件事的两份计数——stopper
 	// 里的这份用于「有写回后重置」（恢复后允许再提示一次）。
 	nudged bool
+	// nudgedRound 是第一次 nudge 时的 rounds 快照。同轮并发工具调用（一次 assistant
+	// 回合发多个 tool_use 是正常且被鼓励的行为）会先后走进 PreToolUse 的 nudge/prevent
+	// 分支——prevent 必须**额外要求 nudge 之后又推进过至少一轮**，否则第二个工具调用会
+	// 从「首次提示」直接跳到「已多次提示，本轮结束」，worker 没机会写回就被终结
+	// （issue #8 实测：正在写回已确认 RCE 结果的那一轮被这样打断，结果永久丢失）。
+	nudgedRound int
 	// mu 保护并发访问（Stop 可能与工具执行并发）。
 	mu sync.Mutex
 	// reason 记录收场原因，落日志/落库用。
@@ -210,6 +216,7 @@ func (s *idleStopper) refreshLocked() bool {
 		s.rounds = 0
 		s.stopped = false
 		s.nudged = false
+		s.nudgedRound = 0
 		return true
 	}
 	return false
@@ -221,6 +228,22 @@ func (s *idleStopper) totalLocked() int {
 		return 0
 	}
 	return s.writes().Total()
+}
+
+// markNudged 记录本次 nudge 时的 rounds 快照（调用方持有 idleStopHooks.mu）。
+func (s *idleStopper) markNudged() {
+	s.mu.Lock()
+	s.nudgedRound = s.rounds
+	s.mu.Unlock()
+}
+
+// advancedSinceNudge 判断 nudge 之后是否又推进过至少一轮工具执行。
+// 同一轮内并发发出的其他工具调用 rounds 不变——它们必须仍然落在提示档，
+// 不能直接升级成收场。
+func (s *idleStopper) advancedSinceNudge() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rounds > s.nudgedRound
 }
 
 // idleStopHooks 把 idleStopper 挂在 harness 的 hook 链上。
@@ -296,11 +319,15 @@ func (h *idleStopHooks) PreToolUse(ctx context.Context, name string, input []byt
 	h.mu.Unlock()
 	if !alreadyNudged {
 		// 第一次：拦住这次工具调用，提示模型写回并收手（它还有机会把成果落库）。
+		// 记录 nudge 时的 rounds 快照：同轮并发发出的其他 tool_use 必须落在提示档。
+		h.stop.markNudged()
 		return true, idleStopMessage, nil
 	}
 	// 提示后仍无写回：再给 idleStopPreventRounds 轮机会；到点就取消 run context
 	// 真正收场（block 只拦单次工具调用，不 cancel 的话模型会逐轮跟 hook 辩论）。
-	if h.stop.rounds >= idleStopPreventRounds {
+	// **nudge 之后必须至少推进过一轮工具执行**才允许收场——同轮并发调用的其余
+	// tool_use 不能直接跳到终结（issue #8）。
+	if h.stop.rounds >= idleStopPreventRounds && h.stop.advancedSinceNudge() {
 		// 先记原因（落日志/可落库），再取消 run context；cancel 缺省时退化为
 		// 只拦截——由 Stop hook 的 prevent 路径兜底收场。
 		if h.onStop != nil {

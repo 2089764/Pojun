@@ -58,3 +58,7 @@ __pycache__/
 *.pyc
 .build-tmp/
 peers/
+
+# 工具运行时文件
+.v2c/
+.video_agent/

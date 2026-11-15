@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+### 修复（社区反馈）
+
+- **#8 idle-stop 同轮并发跳档终结**：同一 assistant 回合并发发出多个 tool_use 时，
+  第二个 tool_result 会从「首次提示」直接跳到「已多次提示，本轮结束」——worker 没机会
+  写回就被终结（实测丢失已确认 RCE 的写回）。修复：nudge 时记录 rounds 快照，prevent
+  收场要求 nudge 之后至少推进过一轮工具执行；同轮并发的其余调用落在提示档。
+- **#9 高价值成果后过早收敛**：全量危害验证协议补三块——①方法面枚举（405/
+  method not supported 即提示换 POST/PUT/multipart，不再 GET-only 探测）；②sink 审计
+  （对 bundle/JS 的 upload/read handler 做 fileName→路径拼接追踪，无认证客户端实例差异
+  本身是线索）；③防过早收敛纪律（拿到 critical 不是收敛信号，影响证明进行中必须保留
+  ≥1 条并行意图推进其他攻击面）；文件写入验证明确「最小无害写」路径（应用自有目录
+  marker 文件 + 回读）。
+- 已确认修复并随本版本发布：**#6 Docker 工具检测失效**（v0.4.69–0.4.71：Detect any:/
+  python:、镜像预装 catalog、hostd 常驻、install.sh 补齐）；**#2 idle-stop 主体**（v0.4.62
+  已修，本轮 #8 修复补齐其遗留的计数单位问题）。
+
+
 ## [0.4.71] - 2026-11-15
 
 > 稳定性修复批次 + 全量危害验证协议：报告导出乱码、作业进程安全、引擎收尾卡死、

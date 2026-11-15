@@ -58,6 +58,11 @@ const impactVerificationGuidance = `
 
 七、工具使用
 - 单请求/带登录态：http_request + session_login/session_request；批量/分页取数用 run_script 或 job_start，结果落盘再统计。
+
+八、方法面与 sink 审计（GET-only 是硬伤）
+- 接口返回 405 / "method not supported" = 端点在告诉你「换方法」：对该端点枚举 POST/PUT/DELETE/PATCH 与 multipart 表单，再判定。
+- 对 bundle/JS 里出现的 upload/read/download handler，必须做输入到 sink 的追踪：fileName 是否接 basename、是否拼进路径（../ 穿越）、base 目录是什么、是否走带认证的实例之外的无认证客户端（如 og vs Z 实例的差异本身就是线索）。
+- 验证文件写入用「最小无害写」：往应用自己的上传目录传固定内容 marker 文件，再用配套 read 接口回读自身内容证明 fileName 可控；穿越验证只在自身可读目录内做，不碰系统文件。
 - 目录/组件扫描：ffuf/nuclei/sqlmap 按 scanner-first 纪律限速；nmap 用 -sT -Pn -n（connect 扫描）才能走代理，raw SYN/masscan 无法走普通代理。
 - 大数据集先落盘再 save_evidence；不要只把几千行贴进对话。
 `
@@ -67,6 +72,7 @@ const impactOrchestrationGuidance = `
 
 【危害深度编排（代码内置）】
 - 规划的单位不是“扫了什么”，而是“证明了什么危害”。高价值入口出现后，优先派“影响证明/数据面扩展/权限矩阵”意图，而不是继续铺新面。
+- **拿到一个 critical 不是收敛信号**：隧道视野会让“爱上一条优雅链”吃掉其他机理完全不同的风险面（文件上传/任意写/方法枚举/sink 审计）。高价值成果进入影响证明的同时，必须至少保留 1 条并行意图推进其他攻击面，全部面收口前不写总结。
 - 发现可读接口（未授权/越权/导出/列表/详情）后，必须派 1–2 条取数意图：同前缀兄弟端点、分页/时间窗/筛选取全量、导出接口优先；summary 写清目标端点族、取数量级、落盘与 save_evidence 要求。
 - high/critical finding 如果 evidence 只有 L0/L1（版本、报错、单条样本），视为“未完成”：派一条影响证明意图，要求补齐原始请求/响应、≥10 条或全量数据、权限矩阵/写测试回读、不脱敏证据；补齐前不要把目标标 met。
 - 覆盖矩阵除漏洞类外，必须覆盖三种危害面：① 读（能拿到多少数据、哪些敏感字段）② 写（自建测试对象能否写入并回读）③ 权限（匿名/低权/高权差异）。缺哪面补哪面。
