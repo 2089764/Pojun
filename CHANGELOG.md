@@ -22,20 +22,54 @@
 
 ## [0.4.72] - 2026-11-15
 
-> 社区反馈修复：idle-stop 同轮并发跳档（#8）、全量验证协议补方法面与 sink 审计（#9）。
+> 社区反馈修复：idle-stop 同轮并发跳档（#8）、全量危害验证协议补方法面枚举与 sink
+> 审计（#9）、install.sh 弱网韧性（git 缺失导致 script 类安装全面失败）。
 
-### 修复（社区反馈）
+### idle-stop 同轮并发跳档终结（issue #8）
 
-- **#8 idle-stop 同轮并发跳档终结**：同轮并发的其余 tool_use 一律落在提示档，
-  prevent 收场要求 nudge 之后至少推进过一轮工具执行——worker 不再没机会写回就被终结。
-- **#9 方法面枚举与 sink 审计**（协议「八、方法面与 sink 审计」）：405 即换方法提示；
-  upload/read handler 的 fileName→sink 追踪；防过早收敛纪律。
+同一 assistant 回合并发发出多个 tool_use 时，第二个 tool_result 会从「首次提示」
+直接跳到「已多次提示，本轮结束」——worker 没机会写回就被终结，实测丢失已确认 RCE
+结果的写回。
 
-### 说明
+根因：`nudged` 只记录「是否提示过」，没有记录提示时的轮次快照。同轮并发发出的
+第二个 tool_use 走进 prevent 分支时，`rounds` 已是前几轮累积的值（≥ preventRounds），
+于是从「首次提示」直接升级成收场。
 
-- **#6 Docker 工具检测失效**已随 v0.4.69–0.4.71 修复并发布（Detect any:/python:、
-  镜像预装 catalog、hostd 常驻、install.sh 补齐）；**#2 idle-stop 主体**v0.4.62 已修，
-  本版本补齐其遗留的计数单位问题。
+修复：nudge 时记录 rounds 快照（`markNudged`），prevent 收场要求 **nudge 之后至少
+推进过一轮工具执行**（`advancedSinceNudge`）——同轮并发发出的其余 tool_use 一律
+落在提示档；只有空转真持续时才升级收场。写回会使计数与快照一起归零，正常路径
+不受影响。
+
+### 全量危害验证协议补齐（issue #9）
+
+- **方法面枚举**：接口返回 405 / "method not supported" = 端点在告诉你「换方法」。
+  对该端点枚举 POST/PUT/DELETE/PATCH 与 multipart 表单再判定，不再 GET-only 探测
+  后搁置。
+- **sink 审计**：对 bundle/JS 里的 upload/read/download handler 做 fileName→路径
+  拼接追踪——是否取 basename、是否拼进路径（../ 穿越）、base 目录是什么、是否走
+  无认证客户端实例（无认证实例与带认证实例的差异本身就是「可能无认证放行」的线索）。
+- **防过早收敛纪律**：拿到一个 critical 不是收敛信号——高价值成果进入影响证明的
+  同时，必须保留 ≥1 条并行意图推进其他攻击面（文件上传/任意写/方法枚举/sink 审计），
+  全部面收口前不写总结。
+- **最小无害写**：文件写入验证走「应用自有目录 marker 文件 → 回读自身内容证明
+  fileName 可控 → 只在自身可读目录内做穿越验证」，不碰系统文件。
+
+### 安装器弱网韧性
+
+- **install.sh apt 安装改为「整组失败 → 逐包重试」**：apt-get install 是原子事务，
+  弱网下 200+ 包里任何一个下载失败会整组回滚——实测把 `git` 一起丢掉，导致 catalog
+  里全部 script 类安装（SecLists / nikto / jwt_tool / searchsploit / msfconsole …）
+  报 127 失败。现在关键基础包（git/jq/perl/ruby/ca-certificates/curl/unzip/openssl/
+  openssh-client/netcat）优先安装，渗透工具组、文档渲染组分组安装，每组失败自动
+  逐包重试。
+- **catalog 预装自动三轮重试**：`install.sh --with-tools` 的 `-install-all` 失败项
+  30 秒后自动重试（每轮只补缺失项），弱网下的无人值守安装成功率显著提高。
+
+### 已确认修复并发布
+
+- **#6 Docker 工具检测失效**：Detect any: 多候选/python: 探测、镜像预装 catalog、
+  hostd 常驻、install.sh 补齐（v0.4.69–0.4.71 已发布）。
+- **#2 idle-stop 主体**：v0.4.62 已修，本版本补齐其遗留的计数单位问题。
 
 
 ## [0.4.71] - 2026-11-15
