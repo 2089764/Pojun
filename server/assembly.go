@@ -306,6 +306,13 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 	if err := pg.AddAgentToToolBinding("reporter", []string{"list_artifacts"}); err != nil {
 		log.Printf("[tools] reporter 绑定 list_artifacts 失败: %v", err)
 	}
+	// evidence_check（v0.4.71）老库补绑：SeedTool 只插不改，存量的 reporter/retester/
+	// pentest/mainagent 行不会自动获得新工具的 agent 绑定；AddAgentToToolBinding 幂等。
+	for _, agentKey := range []string{"pentest", "retester", "reporter", "mainagent"} {
+		if err := pg.AddAgentToToolBinding(agentKey, []string{"evidence_check"}); err != nil {
+			log.Printf("[tools] %s 绑定 evidence_check 失败: %v", agentKey, err)
+		}
+	}
 	// Seed the built-in domain tools (first-insert only; DO NOTHING preserves edits).
 	// No startup prune: rows we didn't seed are left alone so future user-defined
 	// custom tools (system=false, added via the UI) survive restarts.
@@ -314,6 +321,18 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 		agents, _ := json.Marshal(s.Agents)
 		if err := pg.SeedTool(s.Key, s.Desc, schema, agents); err != nil {
 			log.Printf("[tools] seed %s 失败: %v", s.Key, err)
+		}
+		// 内置工具新增参数要补进老库——SeedTool 只插不改，否则模型按旧 schema 调用，
+		// 新参数等于不存在（retire_intent.superseded_by、report_finding 的去重参数、
+		// add_intent.requires_intents 都这样被漏掉过）。MergeToolSchemaProperty 只在
+		// 属性缺失时插入、不覆盖用户已有定义，因此对所有内置工具的全量属性做幂等补种。
+		if props, ok := s.Schema["properties"].(map[string]any); ok {
+			for name, prop := range props {
+				if err := pg.MergeToolSchemaProperty(s.Key, name,
+					map[string]any{name: prop}, s.Desc); err != nil {
+					log.Printf("[tools] 补种 %s.%s 失败: %v", s.Key, name, err)
+				}
+			}
 		}
 	}
 	// Seed the traffic host tools so they're bindable per-agent like built-ins.

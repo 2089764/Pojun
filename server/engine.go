@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"path/filepath"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -260,6 +261,12 @@ func runTaskRoutine(rt *taskRuntime, fn func(context.Context)) {
 // state for a successfully deleted task. The delete barrier remains installed
 // until cleanup finishes, so no new task operation can race the teardown.
 func (e *Engine) StopTask(taskID string) {
+	// 删除/停止后作业不应继续打目标（作业进程跨 run 存活，必须显式收掉）。
+	if e.m != nil {
+		if n := agent.KillJobsForTaskDir(filepath.Join(e.m.dir, "tasks", taskID)); n > 0 {
+			log.Printf("[engine] task %s 停止时清理后台作业 %d 个", taskID, n)
+		}
+	}
 	e.deleteMu.Lock()
 	e.deleting.Store(taskID, true)
 	e.deleteMu.Unlock()
@@ -561,15 +568,61 @@ func truncateStopReason(s string) string {
 }
 
 // transitionIntentState atomically moves an intent from expected to state.
+// 一次瞬时 PG 错误不能让终态落库变成孤儿：running 行会永远卡住任务收尾
+// (HasActiveIntent 恒真、UI 暂停/删除 409、planner 也无法 retire)。重试 3 次，
+// 覆盖 failover/连接重置/序列化冲突这类短故障；真正的状态冲突不重试。
 func transitionIntentState(store *db.ExplorationStore, intentID int64, expected, state string) error {
-	changed, err := store.CompareAndSetIntentState(intentID, expected, state)
-	if err != nil {
-		return err
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		changed, err := store.CompareAndSetIntentState(intentID, expected, state)
+		if err == nil {
+			if changed {
+				return nil
+			}
+			return fmt.Errorf("%w: 意图 %d 不再是 %s 状态", db.ErrIntentStateConflict, intentID, expected)
+		}
+		lastErr = err
+		time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
 	}
-	if !changed {
-		return fmt.Errorf("%w: 意图 %d 不再是 %s 状态", db.ErrIntentStateConflict, intentID, expected)
+	return lastErr
+}
+
+// retryIntentTerminalAsync 为终态落库失败兜底：DB 短故障恢复后自动补写，
+// 避免意图永久停在 running（HasActiveIntent 恒真、任务无法收尾、UI 也 409）。
+func (e *Engine) retryIntentTerminalAsync(store *db.ExplorationStore, intentID int64, state, stopReason string) {
+	go func() {
+		for attempt := 0; attempt < 12; attempt++ {
+			time.Sleep(5 * time.Second)
+			err := transitionIntentState(store, intentID, "running", state)
+			if err == nil {
+				if stopReason != "" {
+					_ = store.SetIntentStopReason(intentID, stopReason)
+				}
+				log.Printf("[worker] 意图 #%d 终态 %s 后台补写成功", intentID, state)
+				return
+			}
+			if errors.Is(err, db.ErrIntentStateConflict) {
+				return // 已被其他路径改过状态，不再覆盖
+			}
+		}
+		log.Printf("[worker] 意图 #%d 终态 %s 后台补写失败（已重试 12 次）", intentID, state)
+	}()
+}
+
+// canceledByGoalMet 判断一次取消是否来自 planner 的 goal_met 收尾。
+func canceledByGoalMet(ctx context.Context) bool {
+	if ctx == nil || ctx.Err() == nil {
+		return false
 	}
-	return nil
+	var abort *agent.AbortCause
+	return errors.As(context.Cause(ctx), &abort) && abort.Code == "goal_met"
+}
+
+func addWriteCounts(dst, src agent.WriteCounts) agent.WriteCounts {
+	dst.Facts += src.Facts
+	dst.Assets += src.Assets
+	dst.Findings += src.Findings
+	return dst
 }
 
 // SteerWork queues a mid-run course-correction for the work running intentID (the
@@ -1405,11 +1458,16 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	var reason harness.TerminalReason
 	var wrote agent.WriteCounts
 	var err error
+	// 每次 Execute 都是一个新 ToolSet，返回值只反映那一次；跨重试必须累加，
+	// 否则首轮写回 4 条 fact、重试轮 0 条时最终记成「零写回」，日志/复盘全错。
+	accWrote := func(w agent.WriteCounts) { wrote = addWriteCounts(wrote, w) }
+	var w agent.WriteCounts
 	if hasChatMessage {
-		reason, wrote, err = worker.ExecuteWithMessage(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, requestID, message, workCancel)
+		reason, w, err = worker.ExecuteWithMessage(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, requestID, message, workCancel)
 	} else {
-		reason, wrote, err = worker.Execute(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, workCancel)
+		reason, w, err = worker.Execute(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, workCancel)
 	}
+	accWrote(w)
 	e.EndLLMCall(t.ID)
 	// model_error 收场 → 额外重跑几次（退避后再试）。仅在意图仍属本 work、任务
 	// 未暂停/未终止/未取消【且未进入收尾】时重试；否则让位给对应分支处理(收尾期不
@@ -1424,11 +1482,13 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 			break // 退避期间被取消（终止/暂停）→ 交给下方分支处理
 		}
 		e.BeginLLMCall(t.ID)
+		var rw agent.WriteCounts
 		if hasChatMessage {
-			reason, wrote, err = worker.ExecuteWithMessage(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, requestID, message, workCancel)
+			reason, rw, err = worker.ExecuteWithMessage(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, requestID, message, workCancel)
 		} else {
-			reason, wrote, err = worker.Execute(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, workCancel)
+			reason, rw, err = worker.Execute(workCtx, name, wTaskID, e.m.assets, t.Store, intent, hooks, emit, e.m.enrich, t.NotifyFinding, workCancel)
 		}
+		accWrote(rw)
 		e.EndLLMCall(t.ID)
 	}
 	// Capture kill state before detachWork cancels workCtx. kill = this work's
@@ -1494,6 +1554,19 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 			_ = t.Store.SetIntentStopReason(intent.ID, db.IntentStopTaskTimeout)
 		}
 		log.Printf("[worker %s] task %s 意图 #%d 因任务超时收尾结束(exhausted)，写回 %s", name, t.ID, intent.ID, wrote)
+		e.touch(t.ID)
+		return true
+	}
+	// goal_met：planner 判定目标达成后取消在跑 worker。任务 status 可能还没切到终态
+	// (settling 也未置位)，若不单独识别会落到下面的「服务停止」分支被退回 open，
+	// worker 立刻重领、整段重跑，而挂起的 goal_met 收尾永远等不到 HasActiveIntent=false。
+	if canceledByGoalMet(ectx) {
+		if err := transitionIntentState(t.Store, intent.ID, "running", "stopped"); err != nil {
+			log.Printf("[worker %s] task %s 意图 #%d goal_met 停止落库失败: %v", name, t.ID, intent.ID, err)
+		} else {
+			_ = t.Store.SetIntentStopReason(intent.ID, db.IntentStopTaskDone)
+		}
+		log.Printf("[worker %s] task %s 意图 #%d 因目标达成取消(stopped)", name, t.ID, intent.ID)
 		e.touch(t.ID)
 		return true
 	}
@@ -1576,7 +1649,8 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		_ = t.Store.SetIntentBlockedReason(intent.ID, db.IntentBlockedLLMQuota)
 	} else {
 		if stateErr := transitionIntentState(t.Store, intent.ID, "running", state); stateErr != nil {
-			log.Printf("[worker %s] task %s 意图 #%d 终态 %s 落库失败: %v", name, t.ID, intent.ID, state, stateErr)
+			log.Printf("[worker %s] task %s 意图 #%d 终态 %s 落库失败（安排后台重试）: %v", name, t.ID, intent.ID, state, stateErr)
+			e.retryIntentTerminalAsync(t.Store, intent.ID, state, stopReason)
 		} else if stopReason != "" {
 			if err := t.Store.SetIntentStopReason(intent.ID, stopReason); err != nil {
 				log.Printf("[worker %s] task %s 意图 #%d 终态原因落库失败: %v", name, t.ID, intent.ID, err)

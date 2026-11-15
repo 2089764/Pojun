@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"path/filepath"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -134,6 +135,10 @@ func (s *Server) applyTaskControlWithCause(t *Task, action string, pauseCause er
 		// compensated and does not lose an otherwise valid conversation turn.
 		s.cancelTaskChat(t.ID, agent.AbortChatPausedWithTask)
 		out.Paused, out.Status = true, "paused"
+		// 暂停 = 停止执行：后台作业（扫描/爆破）也必须停，否则继续打目标。
+		if n := agent.KillJobsForTaskDir(filepath.Join(s.dataDir, "tasks", t.ID)); n > 0 {
+			log.Printf("[task] #%s 暂停时清理后台作业 %d 个", t.ID, n)
+		}
 		go s.reconcileConcurrency()
 	case "resume":
 		queued, err := s.admitPausedTask(t)

@@ -147,7 +147,7 @@ func (s *Server) exportTaskDocx(w http.ResponseWriter, r *http.Request) {
 	})
 	name := fmt.Sprintf("pojun-report-task%s-%s.docx", t.ID, time.Now().Format("20060102"))
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	w.Header().Set("Content-Disposition", attachmentDisposition(name))
 	w.WriteHeader(200)
 	_ = doc.Encode(w)
 }
@@ -297,7 +297,7 @@ func (s *Server) exportFindingDocx(w http.ResponseWriter, r *http.Request) {
 	})
 	name := fmt.Sprintf("pojun-finding-%d-%s.docx", f.ID, time.Now().Format("20060102"))
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	w.Header().Set("Content-Disposition", attachmentDisposition(name))
 	w.WriteHeader(200)
 	_ = doc.Encode(w)
 }

@@ -126,7 +126,7 @@ func mainAgentSystem(goal, dataDir, workDir string) string {
 	body := renderSystem("mainagent", mainAgentDefaultTmpl, MainVars{Goal: goal, DataDir: dataDir, Now: nowStr()})
 	// mainagent 也有 Bash 工具（基础默认工具集），会自己动手查证，
 	// 所以宿主工具清单同样要给它——不然它只能凭想象回答人。
-	out := body + artifactSpec(workDir)
+	out := body + artifactSpec(workDir) + engagementFraming + srcTaskBookGuidance
 	if t := hosttools.SummaryText(); t != "" {
 		out += "\n\n【本机可用工具】\n" + t
 	}
@@ -160,6 +160,8 @@ func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.
 	defer cleanup()
 	// 本任务的工作目录 <workDir>/tasks/<taskID>，先建好。
 	mainDir := ensureRunDir(m.workDir, taskID, 0)
+	// 共享目录注入：主 Agent 同样要能用作业/脚本/PoC 脚手架工具（见 planner 同款注释）。
+	tsx.SetRunDir(mainDir)
 	ctx = intercept.WithReviewWorkingDirectory(ctx, mainDir)
 	system, boundary := deferredSystem(mainAgentSystem(goal, m.workDir, mainDir), def)
 	opts := agentcore.Options{

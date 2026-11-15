@@ -19,6 +19,11 @@ func (t *ToolSet) sharedDir() string {
 		return ""
 	}
 	root := filepath.Dir(t.runDir)
+	if filepath.Base(root) == "tasks" {
+		// planner/mainagent 注入的是任务目录 tasks/<id>（没有 i<intent> 层）；
+		// 直接取 Dir 会落到全局 tasks/，导致看不到 worker 的作业、跨任务互串。
+		root = t.runDir
+	}
 	if filepath.Base(root) == "shared" {
 		root = filepath.Dir(root)
 	}

@@ -84,7 +84,18 @@ func chatWorkDirSpec(workDir string) string {
 // chatSystem renders the DB-managed prompt body for agentKey. Custom agents have
 // no per-key in-code default, so DefaultAssistantPrompt is the render fallback.
 func chatSystem(agentKey, dataDir, workDir string) string {
-	return renderSystem(agentKey, DefaultAssistantPrompt, chatVars{DataDir: dataDir, Now: nowStr()}) + chatWorkDirSpec(workDir)
+	out := renderSystem(agentKey, DefaultAssistantPrompt, chatVars{DataDir: dataDir, Now: nowStr()}) + chatWorkDirSpec(workDir)
+	// 执行/报告类对话 agent 也要看到全量验证口径——它们不走 planner/worker 的
+	// system 装配，只在 chat 路径运行。
+	switch agentKey {
+	case "pentest":
+		out += engagementFraming + impactVerificationGuidance + impactOrchestrationGuidance + srcReportAnnex
+	case "reporter":
+		out += engagementFraming + srcReportAnnex
+	case "retester":
+		out += engagementFraming
+	}
+	return out
 }
 
 // chatVars carries the runtime variables a custom agent's prompt may reference.

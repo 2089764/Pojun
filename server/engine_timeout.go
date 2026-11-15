@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"path/filepath"
 
 	"github.com/chu0119/pojun/intercept"
 	"fmt"
@@ -117,6 +118,9 @@ func (e *Engine) resetTerminalRevival(taskID string) {
 	e.deadline.Delete(taskID)
 	e.stamped.Delete(taskID)
 	e.coordStarted.Delete(taskID)
+	// plannerRound 是进程内累计计数器；复活任务若不清零，auto_finish_max_rounds
+	// 会在复活第一轮立刻再次触发，把人工跟进秒收掉。
+	e.plannerRound.Delete(taskID)
 }
 
 // stampFirstRun records first_run_at + deadline_at on the FIRST real run (LLM ready)
@@ -291,6 +295,12 @@ func (e *Engine) settleTaskWithReason(ctx context.Context, t *Task, reason, deta
 		met = e.runFinalPlannerRound(ctx, t, reason)
 	}
 	if !e.beginTaskOperation(t.ID) {
+		// 删除屏障/并发操作挡住了终态落库。settling 已经置位（planner/worker 都已停止），
+		// 若不清掉，删除 abort 回滚后任务会永久卡在 settling：planner 每轮直接 return、
+		// worker 空转、deadline 协调器已退出，只能重启进程。清掉后下一轮可重新收尾。
+		e.settling.Delete(t.ID)
+		t.requestSettle(reason, detail) // 删除回滚后下一轮继续收尾，不能把触发丢掉
+		log.Printf("[settle] task %s 落终态时被删除屏障挡住，已清除 settling 等待重试", t.ID)
 		return
 	}
 	defer e.decInflight(t.ID)
@@ -311,9 +321,16 @@ func (e *Engine) settleTaskWithReason(ctx context.Context, t *Task, reason, deta
 	won, err := e.m.SetTaskStatusGuarded(t.ID, status)
 	switch {
 	case err != nil:
-		log.Printf("[settle] task %s 落终态失败: %v", t.ID, err)
+		// 终态写库失败：清掉 settling 并重新登记，避免任务永久卡在收尾中。
+		e.settling.Delete(t.ID)
+		t.requestSettle(reason, detail)
+		log.Printf("[settle] task %s 落终态失败（已安排重试）: %v", t.ID, err)
 	case won:
 		log.Printf("[settle] task %s 收尾完成,终态=%s（%s）", t.ID, status, label)
+		// 任务到终态后后台作业不应继续打目标（授权窗口结束）。
+		if n := agent.KillJobsForTaskDir(filepath.Join(e.m.dir, "tasks", t.ID)); n > 0 {
+			log.Printf("[settle] task %s 收尾时清理后台作业 %d 个", t.ID, n)
+		}
 		e.emitActivity(t, db.Activity{Worker: "system", Kind: "text",
 			Summary: fmt.Sprintf("任务收尾完成：%s；终态 %s", label, status)})
 	default:
@@ -329,7 +346,15 @@ func (e *Engine) runFinalPlannerRound(ctx context.Context, t *Task, reason strin
 		return false
 	}
 	planner, _ := e.snapshotFor(t)
+	waitDeadline := time.Now().Add(90 * time.Second)
 	for planner == nil {
+		if time.Now().After(waitDeadline) {
+			// LLM 链不可用（provider 被禁用/配额耗尽）时不能无限等：任务会永远停在
+			// settling（worker 不再领意图、planner 丢弃唤醒、终态永远不写）。按「终局
+			// 判定不可得」处理，由调用方按 goal 实际达成情况落 timeout/done。
+			log.Printf("[settle] task %s 等待终局 planner 超过 90s（LLM 不可用？），跳过终局判定", t.ID)
+			return false
+		}
 		if sleepCtx(ctx, deadlinePollInterval) {
 			return false
 		}

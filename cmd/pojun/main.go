@@ -20,6 +20,7 @@ import (
 	"github.com/chu0119/pojun/config"
 	"github.com/chu0119/pojun/selfupdate"
 	"github.com/chu0119/pojun/server"
+	"github.com/chu0119/pojun/traffic"
 )
 
 // version is the build version, injected at release time via
@@ -95,6 +96,8 @@ func run() int {
 	ctx, shutdown := shutdownContext(sigCtx)
 	defer shutdown(agent.AbortShutdown)
 
+	// MITM 代理日志与主日志分离（CONNECT ERROR 不再刷屏 journal）。
+	traffic.SetupProxyLog(*dataDir)
 	mgr, err := server.NewManager(*dataDir, *proxy)
 	if err != nil {
 		log.Fatalf("open stores: %v", err)

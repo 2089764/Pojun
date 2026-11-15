@@ -42,7 +42,8 @@ func chainNext(dim string) (string, string) {
 }
 
 // dispatchChainIntent 生成继任意图。返回 (intentID, note)。intentID<=0 时 note 说明原因。
-func (t *ToolSet) dispatchChainIntent(vulnclass, name, summary, severity string, assetIDs []int64, findingNodeID, intentID int64) (int64, string) {
+// missing 是 SRC 证据审查列出的缺口；有缺口时续跳目标优先补齐影响证明，而不是泛泛“再打穿”。
+func (t *ToolSet) dispatchChainIntent(vulnclass, name, summary, severity string, assetIDs []int64, findingNodeID, intentID int64, missing []string) (int64, string) {
 	sev := strings.ToLower(strings.TrimSpace(severity))
 	if sev != "critical" && sev != "high" {
 		return 0, ""
@@ -50,7 +51,18 @@ func (t *ToolSet) dispatchChainIntent(vulnclass, name, summary, severity string,
 	dim := inferDimension(vulnclass + " " + name + " " + summary)
 	nextDim, goal := chainNext(dim)
 	if nextDim == "" {
-		return 0, ""
+		if len(missing) == 0 {
+			return 0, ""
+		}
+		// 维度不在续跳表里（如信息泄露/未知类），但证据缺口很明确：
+		// 仍然派一条取数/影响证明意图，避免高危 finding 停在存在性。
+		nextDim = dimDataExport
+		goal = "补齐该漏洞的完整危害证据"
+	}
+	// 证据缺口优先：高/危漏洞只有“存在性”时，续跳第一目标是把危害证明补齐。
+	if len(missing) > 0 {
+		goal = "补齐该漏洞的完整危害证据：" + strings.Join(missing, "、") +
+			"；要求原始请求/响应、真实数据条数与敏感字段、权限矩阵或自建测试对象的写测试回读，不脱敏；补不齐就明确记录阻塞原因。"
 	}
 	// 摘要必须具体：带上漏洞名与维度，避免和别的意图撞车被 dedupe 掉。
 	// name 可能为空（模型只给了 summary），回落到 summary 前 40 字。

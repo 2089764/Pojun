@@ -30,6 +30,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/sirupsen/logrus"
 	"github.com/chu0119/pojun/db"
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
@@ -2214,4 +2215,26 @@ func clip(s string, max int) string {
 		return s
 	}
 	return s[:max] + fmt.Sprintf("\n... [截断，共 %d 字节；完整在流量文件树] ...", len(s))
+}
+
+// SetupProxyLog 把 go-mitmproxy 的日志单独写到 <dataDir>/traffic.log。
+//
+// 目录爆破/扫描时每个失败请求都有一条 "CONNECT ERROR ... context canceled"
+// （level=error），混在主日志里会把启动/升级等关键信息淹没。logrus 在本项目
+// 只有 go-mitmproxy 在使用，所以这里独占式重定向是安全的；只在二进制入口调用，
+// 测试里的临时 Traffic 实例不受影响（否则 Windows 上打开的句柄会让 TempDir 清理失败）。
+// 打开失败时保持默认输出，不阻塞启动；超过 64MB 时在启动阶段轮转一次。
+func SetupProxyLog(dataDir string) {
+	path := filepath.Join(dataDir, "traffic.log")
+	if st, err := os.Stat(path); err == nil && st.Size() > 64<<20 {
+		_ = os.Rename(path, path+".1")
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return
+	}
+	logrus.SetOutput(f)
+	logrus.SetFormatter(&logrus.TextFormatter{DisableColors: true, FullTimestamp: true, TimestampFormat: "2006-01-02 15:04:05"})
+	// 只保留 warning 及以上：请求级的 INFO 每请求一行，没必要留。
+	logrus.SetLevel(logrus.WarnLevel)
 }

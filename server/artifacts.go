@@ -279,7 +279,7 @@ func (s *Server) serveTaskArtifact(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, abs)
 	default:
 		w.Header().Set("Content-Type", a.Mime)
-		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, sanitizeArtifactName(a.Name)))
+		w.Header().Set("Content-Disposition", attachmentDisposition(sanitizeArtifactName(a.Name)))
 		http.ServeFile(w, r, abs)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -511,6 +512,9 @@ func (t *ToolSet) diffResponses() actool.CoreTool {
 	)
 }
 
+// maxResponseFileBytes 是差分文件模式的单文件读取上限（16MB）。
+const maxResponseFileBytes = 16 << 20
+
 // readResponseFile 读一个响应文件，返回（响应体, 状态码）。
 //
 // 容错：文件若是 `curl -i` 保存的完整响应（含 HTTP 头），剥掉头部、
@@ -527,9 +531,29 @@ func readResponseFile(workDir, p string) (string, int, error) {
 		}
 		full = filepath.Join(workDir, p)
 	}
-	b, err := os.ReadFile(full)
+	f, err := os.Open(full)
 	if err != nil {
 		return "", 0, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return "", 0, err
+	}
+	// 只读普通文件且有上限：/dev/zero、FIFO、几 GB 日志会让服务进程无界读取 OOM/挂死，
+	// 所有任务一起受影响（同包 readJobLog 的环形缓冲就是为此）。
+	if !st.Mode().IsRegular() {
+		return "", 0, fmt.Errorf("%q 不是普通文件，拒绝读取", p)
+	}
+	if st.Size() > maxResponseFileBytes {
+		return "", 0, fmt.Errorf("响应文件过大（%d 字节，上限 %d）：请截取相关部分再比较", st.Size(), maxResponseFileBytes)
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxResponseFileBytes+1))
+	if err != nil {
+		return "", 0, err
+	}
+	if len(b) > maxResponseFileBytes {
+		return "", 0, fmt.Errorf("响应文件超过 %d 字节上限", maxResponseFileBytes)
 	}
 	body, status := stripHTTPHeader(string(b))
 	return body, status, nil

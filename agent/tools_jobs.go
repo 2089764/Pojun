@@ -89,16 +89,37 @@ func readJobMeta(dir, name string) (jobMeta, bool) {
 }
 
 // jobState 返回 (状态, 退出码)。状态：running|finished|failed|unknown。
+// jobState 返回 (状态, 退出码)。状态：running|finished|failed|unknown。
 func jobState(m jobMeta) (string, int) {
 	if b, err := os.ReadFile(m.RCFile); err == nil {
 		code := -1
-		fmt.Sscanf(strings.TrimSpace(string(b)), "%d", &code)
-		if code == 0 {
-			return "finished", 0
+		// echo > rc 是「先创建/截断再写入」：轮询可能正好读到空文件。解析不出数字
+		// 时不能当成 failed（会把刚跑完的作业误报失败），退回进程存活判定。
+		if n, _ := fmt.Sscanf(strings.TrimSpace(string(b)), "%d", &code); n == 1 {
+			if code == 0 {
+				return "finished", 0
+			}
+			return "failed", code
 		}
-		return "failed", code
 	}
 	if m.PID > 0 {
+		// 刚启动的包装进程可能还没完成 exec，/proc cmdline 仍是父进程的；
+		// 5s 启动窗口内不做归属校验，避免把新作业误判成 PID 复用。
+		startedAt, startErr := time.Parse(time.RFC3339, m.Started)
+		inStartup := startErr == nil && time.Since(startedAt) < 5*time.Second
+		if !inStartup && !jobOwnsProcess(m) {
+			// PID 已被系统复用：元数据是上一次运行的残留，不能当成 running，
+			// 更不能在任务暂停/删除时按这个 PID 杀进程组。
+			return "failed", -1
+		}
+		if alive, known := jobProcessAlive(m.PID); known && !alive {
+			// Windows 上「进程退出」与「rc 文件可见」之间有短暂窗口：刚结束的
+			// 作业不能立刻报 failed。启动 5s 内按 running 处理，之后才认定崩溃。
+			if started, err := time.Parse(time.RFC3339, m.Started); err == nil && time.Since(started) < 5*time.Second {
+				return "running", -1
+			}
+			return "failed", -1 // 进程已退出但没留下 rc（崩溃/被外部杀）
+		}
 		return "running", -1
 	}
 	return "unknown", -1
@@ -156,10 +177,19 @@ func (t *ToolSet) jobStart() actool.CoreTool {
 				fmt.Fprintf(lf, "\n=== job %s start %s ===\n", name, time.Now().Format(time.RFC3339))
 				_ = lf.Close()
 			}
+			// 同名作业重跑：先停掉仍在跑的旧进程组，避免两份扫描同时打目标。
+			if old, ok := readJobMeta(dir, name); ok {
+				if st, _ := jobState(old); st == "running" {
+					_ = jobKillGroup(old.PID)
+					jobWaitGone(old.PID, 2*time.Second)
+				}
+			}
 			cmd := exec.Command(resolveBash(), "-c",
 				`bash "$0" >> "$2" 2>&1; rc=$?; echo $rc > "$1"; exit $rc`,
 				scriptEnv, rcEnv, logEnv)
 			cmd.Dir = filepath.Dir(dir)
+			// 独立进程组：job_stop 杀整组，内层脚本/子进程一起结束（不再只杀外层包装 shell）。
+			cmd.SysProcAttr = jobSysProcAttr()
 			env := os.Environ()
 			for _, kv := range strings.Split(a.Env, "&") {
 				k, v, ok := strings.Cut(kv, "=")
@@ -172,6 +202,9 @@ func (t *ToolSet) jobStart() actool.CoreTool {
 				return actool.Errorf("启动作业失败: " + err.Error()), nil
 			}
 			pid := cmd.Process.Pid
+			// 作业跨 run 存活：用后台 Wait 收尸，不能 Release——Release 不回收子进程，
+			// 每个作业会留一个僵尸，长期运行把容器 pids limit 占满（此后所有 exec 都失败）。
+			go func() { _ = cmd.Wait() }()
 			// 不 Wait：作业跨 run 存活。父进程退出后由 init 收尸（生产为 systemd 常驻进程）。
 			_ = cmd.Process.Release()
 			m := jobMeta{
@@ -487,15 +520,20 @@ func (t *ToolSet) jobStop() actool.CoreTool {
 			state, code := jobState(m)
 			stopped := false
 			if state == "running" && m.PID > 0 {
-				if p, err := os.FindProcess(m.PID); err == nil {
-					if err := p.Kill(); err == nil {
-						stopped = true
-					}
+				if err := jobKillGroup(m.PID); err == nil {
+					stopped = true
+					// SIGKILL 是异步的：等进程真正退出再返回，否则调用方（测试/暂停/删除
+					// 清理）紧接着检查进程状态会看到残留而误判「没杀掉」。
+					jobWaitGone(m.PID, 2*time.Second)
+					// 外层包装进程一起被杀，rc 不会再写；补一个 137（SIGKILL）标记，
+					// 否则 jobState 会因 PID>0 永远显示 running。
+					_ = os.WriteFile(m.RCFile, []byte("137"), 0o644)
+					code = 137
 				}
 			}
 			return jsonResult(map[string]any{
 				"name": name, "stopped": stopped, "state_before": state, "exit_code": code,
-				"note": "若作业里起了子进程，停止的是脚本进程；残留子进程用 Bash 的 ps/kill 处理。",
+				"note": "停止的是整个进程组（脚本及其子进程）。",
 			})
 		},
 	)

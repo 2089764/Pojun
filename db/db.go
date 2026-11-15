@@ -373,6 +373,7 @@ var builtinSkillVisibility = map[string][]string{
 	"zero-day-research":        {"planner", "pentest", "worker"},
 	"pentest-verification":     {"pentest", "worker"},
 	"pentest-output-standards": {"pentest", "worker"},
+	"src-acceptance":           {"planner", "pentest", "retester", "reporter", "worker"},
 	// 场景专项
 	"redteam-ops":              {"pentest", "worker"},
 	"redteam-opsec":            {"pentest", "worker"},

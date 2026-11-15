@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/Autumn-27/norma/harness"
@@ -92,6 +93,22 @@ func resolveWrapupTurns(agentKey string) int {
 // turn budget are admin-editable per agent; disabled tools are code-owned policy so
 // a user can't edit away the "stop probing" guardrail. Resolved fresh each run
 // (reads DB live), so edits apply on the next run without a restart.
+// settlementDisabledTools 返回收尾阶段要隐藏的工具：只藏 Bash 不够——job_start、
+// http_request、session_login、listener_*、payment_* 等都能绕过 Bash 继续执行/打目标，
+// 收尾预算会被新探测吃掉，真正的 record_fact/report_finding 写不完。
+func settlementDisabledTools() []string {
+	out := make([]string, 0, len(localExecToolNames)+12)
+	for name := range localExecToolNames {
+		out = append(out, name)
+	}
+	out = append(out,
+		"Monitor", // SDK 后台任务：能跑 shell
+		"shell_open", "shell_exec", "shell_input", "shell_close", "shell_list", "shell_write",
+	)
+	sort.Strings(out)
+	return out
+}
+
 func wrapupSettlement(agentKey string, disabledTools []string) *harness.Settlement {
 	return &harness.Settlement{
 		Prompt:        resolveWrapup(agentKey),

@@ -4,6 +4,66 @@
 
 ## [Unreleased]
 
+## [0.4.71] - 2026-11-15
+
+> 稳定性修复批次 + 全量危害验证协议：报告导出乱码、作业进程安全、引擎收尾卡死、
+> SRC 证据验收（evidence_check / 影响阶梯 / 证据缺口续跳）。
+
+### 修复（正确性与安全）
+
+- **报告导出乱码**：`FindingFilename` 按字节硬截断会把汉字劈成非法 UTF-8，zip 因此
+  不置 UTF-8 标志位，Windows/WinRAR 按 CP437 解码整串乱码；改为按字符边界截断，导出
+  的 .md 加 UTF-8 BOM，Markdown/OOXML 文本统一清洗（非法 UTF-8 → U+FFFD、剔除 XML
+  控制字符），附件下载中文名改 RFC 5987 `filename*=`。
+- **planner/mainagent 共享目录不可用**：两处漏了 `SetRunDir`，导致规划者/主 Agent 调
+  `job_start`/`job_status`/`save_script`/`run_script`/`poc_scaffold` 统一报
+  「任务共享目录不可用」——已补齐。
+- **任务共享目录推导**：planner/mainagent 的 runDir 没有 `i<intent>` 层，原实现会落到
+  全局 `tasks/shared`（跨任务作业/脚本/cookie 互串）——已按任务目录修正。
+- **后台作业进程管理**：`job_start` 用独立进程组启动 + 后台 Wait 收尸（不再留僵尸）；
+  `job_stop` 杀整个进程组并在 SIGKILL 后等待真正退出（补 rc=137）；同名重跑先停旧作业；
+  **PID 归属校验**（`/proc/<pid>/cmdline` 校验作业 rc 路径，跨重启的元数据不会误杀无关
+  进程）；任务暂停/停止/收尾统一清理后台作业（作业不该在授权窗口外继续打目标）。
+- **引擎意图派发/收尾**：goal_met 后取消的意图归 stopped（不再退回 open 整段重跑、
+  卡住收尾）；终态落库 3 次重试 + 失败后台补写（PG 闪断不再留永久 running 孤儿）；
+  收尾被删除屏障挡住/终态写库失败时清 settling 并重新登记（不再永久卡「收尾中」）；
+  终局 planner 等待加 90s 上限（LLM 不可用也能落终态）；复活任务清零规划轮计数
+  （防 auto_finish_max_rounds 秒收人工跟进）；重试轮写回计数改为累加。
+- **scan_with_nuclei 命令注入**：target/severity 先做语义校验，组装命令时逐参数单引号
+  包裹（`& ; $()` 不再被 shell 解释）；有 GNU timeout 时包 600s 总超时。
+- **diff_responses 文件模式 OOM**：只读普通文件 + 16MB 上限（`/dev/zero`、FIFO、
+  超大日志不再让服务无界读取）。
+- **工具 schema 补种**：升级为对所有内置工具的全量属性幂等 merge（此前只补
+  retire_intent 单参数，且公开版漏接线）——老库升级也能拿到新增参数。
+- **收尾阶段禁用工具扩展**：只藏 Bash 不够，`job_*`/`http_request`/`session_login`/
+  `listener_*`/shell 等执行类工具在收尾轮一并隐藏，收尾预算只留给写证据。
+- **代理日志分离**：MITM 的 `CONNECT ERROR` 单独写 `data/traffic.log`（64MB 轮转），
+  主 journal 不再被扫描噪声刷屏。
+
+### 新增
+
+- **自动范围归属校验**：`insert_assets` 自动入范围必须归属于任务基线——域名同根域、
+  IP 落在基线网段、或任务声明 company 范围；公共基础设施/CDN（min.io/github/cloudflare/
+  aliyun CDN 等 35 项）一律不收；无基线的老任务保持旧行为。planner 提示词加「范围硬约束」。
+- **存量越界范围审计**：`pojun-maint scope-audit` 按新规则回放所有 source=auto 的范围行，
+  输出「应保留/建议清理」清单（只读，`--out` 可导出 JSON；清理需备份后人工确认）。
+- **全量危害验证协议与 SRC 证据验收**：
+  - `evidence_check` 只读工具：13 项检查 + 分数 + `src_ready` + missing 补齐建议，
+    支持无任务上下文（传 evidence 纯文本），非 HTTP 漏洞可用命令+回显作为原始证据；
+  - `report_finding` 回执新增 `src_review`；高/危漏洞证据缺口写入 warnings，自动续跳
+    意图改为**定向补齐缺口**（原始请求/响应、数据量/字段、权限矩阵/写测试）；
+  - 影响阶梯 L0–L4、按类最低证明、数据量 ≥10 条或全量统计、权限矩阵、12 项证据格式、
+    不脱敏要求——作为代码内置尾巴追加到 worker/planner/pentest/reporter/mainagent/goals；
+  - **拒答自愈**（`llmguard`）：中英文拒答检测 + 两层合规重试（只补授权与产出说明，
+    不改意图/工具权限/拦截规则）；`POJUN_REFUSAL_GUARD=0` / `POJUN_REFUSAL_RETRIES` 可调；
+  - 新增 `src-acceptance` 技能，重写 `pentest-verification` / `pentest-output-standards`。
+
+### 验证
+
+- `go build ./...` / `go vet ./...` 通过；全量 `go test -p 1 ./...`（真实 PostgreSQL）。
+- 检出并修复了公开版此前未生效的 S2（`MergeToolSchemaProperty` 只落函数未接线）。
+
+
 ## [0.4.70] - 2026-11-13
 
 > 安装器弱网韧性：apt 逐包兜底 + catalog 预装三轮重试（修 git 缺失导致 script 类安装全面失败）。

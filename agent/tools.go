@@ -1882,6 +1882,9 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 				verifyNote = fmt.Sprintf("⚠️ 证据出处核对：仅 %d/%d 行可在本次工具输出中逐字找到，其余为转述；关键结论请引用原文。", matched, total)
 			}
 		}
+		// 全量验证 / SRC 证据完整性审查（只读、不阻断）：13 项检查 + src_ready + missing，
+		// 写进回执供模型自检；高/危漏洞的缺口会带进自动续跳意图再补齐。
+		review := ReviewEvidence(a.Severity, a.VulnClass, a.Evidence)
 		// Auto-binding off: ignore the evidence params instead of rejecting the call.
 		// stripTrafficParameters already removes them from the advertised schema, but
 		// models routinely emit fields anyway — failing here would discard a confirmed
@@ -1950,8 +1953,9 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 			EvidenceNote       string `json:"evidence_note,omitempty"`
 			EvidenceVerifyNote string `json:"evidence_verify_note,omitempty"`
 			ChainIntentID      int64  `json:"chain_intent_id,omitempty"`
+			SRCReview          any    `json:"src_review,omitempty"`
 			ChainNote          string `json:"chain_note,omitempty"`
-		}{RecordedFinding: recorded, EvidenceStatus: "bound", EvidenceVerifyNote: verifyNote}
+		}{RecordedFinding: recorded, EvidenceStatus: "bound", EvidenceVerifyNote: verifyNote, SRCReview: review}
 		if len(recorded.CrossTaskDupTasks) > 0 {
 			ids := make([]string, 0, len(recorded.CrossTaskDupTasks))
 			for _, tid := range recorded.CrossTaskDupTasks {
@@ -1998,7 +2002,7 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 		// 攻击链自动续跳（v0.4.63 红队批次下放）：只有新建的 finding 才续跳；重复上报（已合并）不派。
 		if !recorded.Duplicate {
 			if cid, note := t.dispatchChainIntent(a.VulnClass, a.Name, a.Summary, a.Severity,
-				pidList(a.AssetIDs), recorded.NodeID, pid(a.IntentID)); cid > 0 || note != "" {
+				pidList(a.AssetIDs), recorded.NodeID, pid(a.IntentID), review.Missing); cid > 0 || note != "" {
 				result.ChainIntentID = cid
 				result.ChainNote = note
 			}
@@ -2979,6 +2983,8 @@ func (t *ToolSet) PlannerTools() []actool.CoreTool {
 		t.apiContractTool(),
 		// search_recent_critical：按【时间】查最近披露的高危漏洞（不需先知道组件名/CVE 号）。
 		t.searchRecentCritical(),
+		// evidence_check（v0.4.71）：规划阶段复核高/危漏洞证据是否足以支撑危害结论。
+		t.evidenceCheck(),
 	}
 }
 

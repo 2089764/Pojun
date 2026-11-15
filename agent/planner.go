@@ -346,6 +346,8 @@ const plannerDefaultTmpl = `你是一个网络安全平台授权渗透测试系�
 
 任务目标：{{.Goal}}
 
+**范围硬约束**：只对 task_scope 内的资产派意图、设计利用链。目标页面上的外链、第三方 CDN/静态库、证书 SAN 上的别家域名、同 IP 旁站都不是目标；确实必须碰的（如目标自建的 S3/对象存储网关）用 add_task_scope 带 reason 显式加入、由人复核。范围外资产只记录，不围绕它派活，也不计入目标进度。
+
 **本轮该产出几个意图（先想清楚这条）**：
 - **硬底线（最高优先）**：只要【目标未达成】且【当前没有任何 open 或 running 意图】（frontier_open=0 且 running_intents 为空），本轮就【必须】产出至少一个向目标推进的意图——没有在跑的 work 可等、也没有在排队的方向时，产出 0 意图=任务停摆；哪怕已知方向都只在 recent_done 里，也要据下面 done/exhausted/blocked 的判断另开一条或续派一条。
 - 硬底线之外，**产出 0 个意图是正常结果，但要有正当理由**（不是"少派更稳"的默认）：①**已覆盖**——你想到的方向都已被仍在 open/running 的意图处理（换措辞重复生成已存在的意图是严重错误）；②**等待依赖**——下一步依赖当前在跑 work 的产出、而它还没出来（此时硬派会让下游拿不到前置而空转，应等下次唤醒图更新后再派）。
@@ -422,7 +424,8 @@ const plannerDefaultTmpl = `你是一个网络安全平台授权渗透测试系�
 func plannerSystem(goal, dataDir, workDir string) string {
 	body := renderSystem("planner", plannerDefaultTmpl, PlannerVars{Goal: goal, DataDir: dataDir, Now: nowStr()})
 	// 作业硬尾巴（v0.4.63）：漏洞覆盖矩阵/纵深优先 + 授权边界复核。
-	return body + artifactSpec(workDir) + coverageMatrixPlannerGuidance + scopeVerifyPlannerGuidance + execFacePlannerGuidance
+	return body + artifactSpec(workDir) + coverageMatrixPlannerGuidance + scopeVerifyPlannerGuidance + execFacePlannerGuidance +
+		engagementFraming + impactOrchestrationGuidance
 }
 
 // Plan runs one planning round. emit, if non-nil, receives the planner's execution
@@ -482,6 +485,10 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	}
 	// 本任务的工作目录 <workDir>/tasks/<taskID>，先建好。
 	taskDir := ensureRunDir(p.workDir, taskID, 0)
+	// 共享目录注入：planner 也要能调 job_start/job_status/save_script/run_script/
+	// poc_scaffold——漏了这行它们统一报「任务共享目录不可用（runDir 未注入）」
+	// （worker 有注入所以从不报错，问题只在规划者/主 Agent 侧复现）。
+	tsx.SetRunDir(taskDir)
 	ctx = intercept.WithReviewContext(ctx, taskDir, intercept.ReviewBackground{})
 	sysBody := plannerSystem(goal, p.workDir, taskDir)
 	if p.wantConstraints() {
