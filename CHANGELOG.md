@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+## [0.4.74] - 2026-11-16
+
+### 新增（issue #13）
+
+- **http_request / session_login 支持自定义 User-Agent**：显式 `user_agent` 参数
+  （可选），覆盖默认 Chrome/131 Windows UA——指纹对抗、伪装移动端、复现特定客户端
+  行为时用。`session_login` 也可走 `header` 参数传 UA；`headers` 参数同样可覆盖
+  （schema 描述已明确标注）。
+
+
 ## [0.4.73] - 2026-11-16
 
 > macOS 适配完善（Apple Silicon 实测反馈）+ DeepSeek 配置文档。安装形态专项的收尾。

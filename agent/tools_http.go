@@ -283,6 +283,7 @@ type httpArgs struct {
 	URL         string `json:"url"`
 	Method      string `json:"method"`
 	Headers     string `json:"headers"`
+	UserAgent   string `json:"user_agent"`
 	Body        string `json:"body"`
 	BodyJSON    string `json:"body_json"`
 	Session     string `json:"session"`
@@ -438,7 +439,14 @@ func (t *ToolSet) doHTTP(ctx context.Context, a httpArgs, jar http.CookieJar) ht
 		out.Err = err
 		return out
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+	// 默认 UA 是 Chrome/131 Windows；显式传 user_agent 时覆盖（issue #13：
+	// 指纹对抗/伪装移动端/复现特定客户端都需要可控的 UA）。
+	switch {
+	case a.UserAgent != "":
+		req.Header.Set("User-Agent", a.UserAgent)
+	default:
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+	}
 	req.Header.Set("Accept", "*/*")
 	if body != "" && a.BodyJSON != "" {
 		req.Header.Set("Content-Type", "application/json")
@@ -548,6 +556,7 @@ func (t *ToolSet) httpRequest() actool.CoreTool {
 			"url":              str("绝对 URL（http/https）"),
 			"method":           str("HTTP 方法，默认 GET"),
 			"headers":          str("请求头，每行一条 'Key: Value'（可选）"),
+			"user_agent":       str("自定义 User-Agent（可选；默认 Chrome/131 Windows。指纹对抗/伪装移动端/复现特定客户端时用）"),
 			"body":             str("请求体原文（可选）"),
 			"body_json":        str("请求体 JSON（可选，设置后自动带 Content-Type: application/json；与 body 二选一）"),
 			"session":          str("会话名：复用任务级 cookie jar（可选）"),
@@ -630,7 +639,7 @@ func (t *ToolSet) sessionLogin() actool.CoreTool {
 			"user_field":   str("表单用户名字段名，默认 username"),
 			"pass_field":   str("表单密码字段名，默认 password"),
 			"extra_fields": str("额外字段，'k=v&k2=v2' 形式（可选）"),
-			"header":       str("附加请求头，每行 'Key: Value'（可选，如 X-Requested-With: XMLHttpRequest）"),
+			"header":       str("附加请求头，每行 'Key: Value'（可选，如 X-Requested-With: XMLHttpRequest）；传 User-Agent 可覆盖默认 Chrome UA"),
 		}, "session", "url"),
 		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 			var a struct {
