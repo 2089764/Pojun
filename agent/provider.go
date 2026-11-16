@@ -20,12 +20,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chu0119/pojun/llmrec"
 	"github.com/Autumn-27/norma/agentcore"
 	"github.com/Autumn-27/norma/compaction"
 	"github.com/Autumn-27/norma/llm"
 	acperm "github.com/Autumn-27/norma/permission"
 	"github.com/Autumn-27/norma/transcript"
+	"github.com/chu0119/pojun/llmrec"
 )
 
 // Config describes the LLM backend resolved from the environment.
@@ -88,6 +88,11 @@ type Config struct {
 	// 空 = 不发送。值由 transcript.WithSessionID 挂在请求 context 上,由 RoundTripper
 	// 读取填入,因此同一共享 provider 也能按会话发出不同的头值。
 	SessionHeaderKey string
+	// UserAgent,非空时用它替换每个 LLM 请求的 User-Agent 头。默认空 = 保持
+	// SDK/Go 的 "Go-http-client/1.1"(历史行为)。有些网关/WAF 会直接拦截默认
+	// Go UA,填一个浏览器 UA 即可放行;由 quotaAwareTransport 统一注入,覆盖
+	// 建连重试与空响应重试发出的所有请求。
+	UserAgent string
 	// Retry 是该配置解析后的重试参数(profile 覆盖 → 全局策略 → 内置默认,由
 	// server 侧解析)。三层的含义见 RetryConfig;零值 = 完全沿用内置默认。
 	Retry RetryConfig
@@ -276,7 +281,7 @@ func (c Config) Provider() string {
 // limiter lives on the single provider instance — so planner + all workers +
 // main agent (which share this provider) are bounded by one shared rate limit.
 func (c Config) NewProvider() (llm.Provider, error) {
-	client, err := quotaAwareHTTPClient(c.Proxy, c.SessionHeaderKey)
+	client, err := quotaAwareHTTPClient(c.Proxy, c.SessionHeaderKey, c.UserAgent)
 	if err != nil {
 		return nil, err
 	}
@@ -364,9 +369,19 @@ type quotaAwareTransport struct {
 	// carries; its value is the session id read from the request context. Empty
 	// disables it. See Config.SessionHeaderKey.
 	sessionHeaderKey string
+	// userAgent, when non-empty, replaces the request's User-Agent header. Empty
+	// keeps the SDK/Go default. See Config.UserAgent.
+	userAgent string
 }
 
 func (t quotaAwareTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// User-Agent override: net/http has already filled in Go-http-client/1.1 by
+	// the time RoundTrip runs, so a plain Set is enough to replace it. Applying it
+	// here (not at request construction) also covers the SDK's connect/empty
+	// retries, which build their own requests.
+	if t.userAgent != "" {
+		req.Header.Set("User-Agent", t.userAgent)
+	}
 	// Custom session-id header: name is user-configured, value is THIS run's
 	// session id (norma stashes it on the context via transcript.WithSessionID).
 	// Stable across a session's turns and distinct across sessions — exactly what
@@ -428,7 +443,7 @@ func requestBodySnapshot(req *http.Request) string {
 	return string(b)
 }
 
-func quotaAwareHTTPClient(proxy, sessionHeaderKey string) (*http.Client, error) {
+func quotaAwareHTTPClient(proxy, sessionHeaderKey, userAgent string) (*http.Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	proxy = strings.TrimSpace(proxy)
 	if proxy == "" {
@@ -447,7 +462,24 @@ func quotaAwareHTTPClient(proxy, sessionHeaderKey string) (*http.Client, error) 
 		}
 		transport.Proxy = http.ProxyURL(proxyURL)
 	}
-	return &http.Client{Transport: quotaAwareTransport{base: transport, sessionHeaderKey: strings.TrimSpace(sessionHeaderKey)}}, nil
+	return &http.Client{Transport: quotaAwareTransport{base: transport, sessionHeaderKey: strings.TrimSpace(sessionHeaderKey), userAgent: sanitizeUserAgent(userAgent)}}, nil
+}
+
+// sanitizeUserAgent makes any user-supplied UA safe to send as a single HTTP
+// header value: trim the ends and turn control characters (CR/LF above all)
+// into spaces. The save path already rejects CR/LF, but a profile edited
+// directly in the DB must not be able to break every model request.
+func sanitizeUserAgent(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	return strings.Map(func(r rune) rune {
+		if r == '\t' || r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, s)
 }
 
 // logTestConnection prints the raw HTTP status code(s) and response body of a

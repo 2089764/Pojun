@@ -75,6 +75,48 @@ const EFFORT_LEVELS: { value: string; label: string }[] = [
   { value: "max", label: "max" },
 ];
 
+// LLM 请求 UA 的常用模板。选模板只是把完整 UA 填进输入框，之后仍可继续手改；
+// 第一项 ua="" = 不覆盖，保持 SDK/Go 默认（Go-http-client/1.1）。
+const CUSTOM_UA = "custom";
+const UA_PRESETS: { value: string; label: string; ua: string }[] = [
+  { value: NONE, label: "不覆盖（默认 Go UA）", ua: "" },
+  {
+    value: "chrome-win",
+    label: "Chrome · Windows",
+    ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  },
+  {
+    value: "chrome-mac",
+    label: "Chrome · macOS",
+    ua: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  },
+  {
+    value: "chrome-android",
+    label: "Chrome · Android",
+    ua: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+  },
+  {
+    value: "safari-mac",
+    label: "Safari · macOS",
+    ua: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15",
+  },
+  {
+    value: "safari-iphone",
+    label: "Safari · iPhone",
+    ua: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Mobile/15E148 Safari/604.1",
+  },
+  {
+    value: "edge-win",
+    label: "Edge · Windows",
+    ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
+  },
+  {
+    value: "firefox-win",
+    label: "Firefox · Windows",
+    ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0",
+  },
+];
+
 function cooldownText(secs: number) {
   if (secs <= 0) return "";
   if (secs < 60) return `${secs}s`;
@@ -338,6 +380,7 @@ function ProfileSheet({
   const [maxTokens, setMaxTokens] = React.useState("0"); // 单次回复输出上限;0=不发送
   const [maxTokensField, setMaxTokensField] = React.useState(NONE); // 上限用哪个字段名;NONE=max_tokens
   const [sessionHeaderKey, setSessionHeaderKey] = React.useState(""); // 自定义会话头名;空=不发送
+  const [userAgent, setUserAgent] = React.useState(""); // LLM 请求 UA;空=保持 SDK/Go 默认
   const [retry, setRetry] = React.useState<LLMRetryOverride>(ZERO_OVERRIDE); // 本配置的重试覆盖;全 0=跟随全局
   const [testing, setTesting] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
@@ -365,6 +408,7 @@ function ProfileSheet({
     setMaxTokens(String(profile?.max_tokens ?? 0));
     setMaxTokensField(fromStore(profile?.max_tokens_field));
     setSessionHeaderKey(profile?.session_header_key ?? "");
+    setUserAgent(profile?.user_agent ?? "");
     setRetry(profile?.retry ?? ZERO_OVERRIDE);
     setApiKey("");
     setKeyHint(profile?.api_key_hint ?? "");
@@ -373,13 +417,15 @@ function ProfileSheet({
   }, [open, profile]);
 
   const profileId = profile ? Number(profile.id) : undefined;
+  // 当前 UA 与某个模板完全一致就显示该模板，否则显示「自定义」。
+  const uaPresetValue = UA_PRESETS.find((p) => p.ua === userAgent)?.value ?? CUSTOM_UA;
 
   async function loadModels() {
     if (loadingModels) return;
     setLoadingModels(true);
     setModels([]);
     try {
-      const r = await api.fetchLLMModels(format, baseUrl, apiKey, proxy, profileId);
+      const r = await api.fetchLLMModels(format, baseUrl, apiKey, proxy, profileId, userAgent.trim());
       if (r.ok && r.models && r.models.length > 0) {
         setModels(r.models);
         setModelsOpen(true);
@@ -411,6 +457,7 @@ function ProfileSheet({
         profileId,
         streaming,
         sessionHeaderKey.trim(),
+        userAgent.trim(),
       );
       // 回复内容一并展示：看得见模型确实说了话，才算和会话里跑通是一回事。
       if (r.ok)
@@ -454,6 +501,7 @@ function ProfileSheet({
         // 后端也会再做一次同样的归一化，这里只是别让 UI 送出自相矛盾的值。
         max_tokens_field: format === "openai" ? toStore(maxTokensField) : "",
         session_header_key: sessionHeaderKey.trim(),
+        user_agent: userAgent.trim(),
         retry,
       });
       if (isNew) toast.success(`已新建：${name.trim()}（在卡片上「设为激活」以启用）`);
@@ -475,6 +523,7 @@ function ProfileSheet({
           Number(id),
           streaming,
           sessionHeaderKey.trim(),
+          userAgent.trim(),
         );
         if (!t.ok) {
           toast.error(
@@ -628,6 +677,41 @@ function ProfileSheet({
               填写头名后，每次请求都会带上这个 HTTP 头，头值自动填为 <b>当前会话的 session id</b>（chat 会话如
               conv-12、worker 如 exp3-worker-i87）。用于按 session-id 头做提示缓存 /
               粘性路由的网关；同一会话多轮稳定、不同会话互不相同。留空则不发送。
+            </p>
+          </div>
+
+          <div className="grid gap-2">
+            <Label htmlFor="p-user-agent">LLM 请求 User-Agent（可选）</Label>
+            <Select
+              value={uaPresetValue}
+              onValueChange={(v) => {
+                const preset = UA_PRESETS.find((p) => p.value === v);
+                if (preset) setUserAgent(preset.ua); // 「自定义」只切显示，不改输入框
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="选择常用 UA 模板" />
+              </SelectTrigger>
+              <SelectContent>
+                {UA_PRESETS.map((p) => (
+                  <SelectItem key={p.value} value={p.value}>
+                    {p.label}
+                  </SelectItem>
+                ))}
+                <SelectItem value={CUSTOM_UA}>自定义（在下方输入）</SelectItem>
+              </SelectContent>
+            </Select>
+            <Input
+              id="p-user-agent"
+              className="font-mono text-xs"
+              placeholder="留空=保持 SDK 默认（Go-http-client/1.1）"
+              value={userAgent}
+              onChange={(e) => setUserAgent(e.target.value)}
+            />
+            <p className="text-muted-foreground text-xs">
+              非空时替换<b>每个 LLM 请求</b>的 User-Agent（含重试）。部分网关 / WAF
+              会直接拦截默认的 Go UA（表现为 403、连接被重置），选一个浏览器模板即可；
+              选完可继续手动修改。只影响 LLM 出站请求，不影响对渗透目标的任何请求。
             </p>
           </div>
 

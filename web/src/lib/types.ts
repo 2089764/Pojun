@@ -1190,6 +1190,9 @@ export interface LLMProfile {
   // 自定义会话头名：非空时每次请求带该 HTTP 头，头值=当前会话/意图的 session id。
   // ""=不发送。用于按 session-id 头做提示缓存/粘性路由的网关。
   session_header_key?: string;
+  // LLM 请求的 User-Agent：非空时替换每个模型请求的 UA；""=保持 SDK/Go 默认。
+  // 用于网关/WAF 直接拦截 Go-http-client 默认 UA 的场景。
+  user_agent?: string;
   // 本配置对重试的覆盖（建连/空响应/同 provider 安全窗口）。留空/全 0 = 跟随全局策略。
   retry?: LLMRetryOverride;
 }

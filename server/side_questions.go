@@ -15,12 +15,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Autumn-27/norma/llm"
+	"github.com/Autumn-27/norma/transcript"
 	"github.com/chu0119/pojun/agent"
 	"github.com/chu0119/pojun/db"
 	"github.com/chu0119/pojun/llmrec"
 	"github.com/chu0119/pojun/sidequestion"
-	"github.com/Autumn-27/norma/llm"
-	"github.com/Autumn-27/norma/transcript"
 )
 
 type sideRun struct {
@@ -41,7 +41,7 @@ type sideQuestionState struct {
 }
 
 func sideModel(cfg agent.Config, id int64, name string) sidequestion.Model {
-	b, _ := json.Marshal([]any{cfg.Format, cfg.BaseURL, cfg.Model, cfg.ThinkingType, cfg.ReasoningEffort, cfg.Stream, cfg.MaxTokensField, cfg.SessionHeaderKey})
+	b, _ := json.Marshal([]any{cfg.Format, cfg.BaseURL, cfg.Model, cfg.ThinkingType, cfg.ReasoningEffort, cfg.Stream, cfg.MaxTokensField, cfg.SessionHeaderKey, cfg.UserAgent})
 	h := sha256.Sum256(b)
 	return sidequestion.Model{ProfileID: id, Name: name, Format: string(cfg.Format), Model: cfg.Model, Identity: hex.EncodeToString(h[:]), Streaming: cfg.Stream, WindowTokens: cfg.CompactionWindow()}
 }

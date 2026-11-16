@@ -126,12 +126,20 @@ jobs:
             echo ""
             echo "## 本版本更新内容"
             echo ""
-            # 提取 CHANGELOG.md 中本版本的完整段落（## [VER] 到下一个 ## 之间）
-            awk -v ver="## [$VER]" '
-              $0 ~ ver { flag = 1; next }
-              flag && /^## / { exit }
-              flag { print }
-            ' CHANGELOG.md
+          # 提取 CHANGELOG.md 中本版本的完整段落（## [VER] 到下一个 ## 之间）。
+          # 必须用 index() 做字面量前缀匹配：awk 的 ~ 会把 "[0.4.74]" 当成字符类，
+          # 导致匹配不到带方括号的版本标题，反而命中附录里的 "## 0.4.4 – 0.4.19"
+          # ——这正是 v0.4.73~0.4.75 Release 页贴出整段旧表格的根因。
+          FOUND=$(awk -v ver="## [$VER]" '
+            index($0, ver) == 1 { flag = 1; next }
+            flag && /^## / { exit }
+            flag { print }
+          ' CHANGELOG.md)
+          if [ -z "$FOUND" ]; then
+            echo "::error::CHANGELOG.md 缺少 ## [$VER] 段，拒绝发布空说明的 Release"
+            exit 1
+          fi
+          printf '%s\n' "$FOUND"
             echo ""
             echo "---"
             echo ""
