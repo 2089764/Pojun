@@ -62,8 +62,6 @@
   后恢复 hostd 启动 + 预装链路。
 - **预装完成标记移到容器层**：标记原在 data 持久卷，镜像升级重建容器后「工具没了、
   标记还在」→ 永久跳过预装、工具静默消失。标记随容器生命周期走，重建即重跑（预装幂等）。
-- **feroxbuster arm64 404**：v2.14 起 arm64 只发 `.zip` 资产，资产模板支持 `||` 多候选
-  依次尝试（404 时换下一候选，hostd 与 install.sh 表驱动同步支持）。
 - **kerbrute / waybackurls arm64**：上游不发 linux/arm64 资产——Dockerfile 加 golang
   构建阶段现场编译（QEMU 下增量可控），arm64 Docker 用户补齐这两项。
 - **netexec arm64**：依赖 aardwolf 需 Rust ≥ 新版，Debian bookworm 自带 rustc 过旧——
