@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [0.4.78] - 2026-11-16
+
+### 修复（安全，感谢 @FldBudin 的 PR #15）
+
+- **DSL 顶层 OR 未成组，导致任务 scope 被绕过**：`list_assets` 与
+  `GET /api/assets?dsl=` 在 DSL 含 OR 时，调用方追加的 `AND type/task_ids/scope`
+  受 SQL 运算符优先级影响只约束最后一个 OR 分支，可返回其他任务的资产（实测任务 A
+  的 `url=profile OR url=token OR url=register` 查到任务 B 的 6 条资产）。
+  `buildDSLWhereBase` 返回前对整体谓词包一层括号，使其成为自包含布尔组；不含 OR
+  的查询语义不变。新增构造层与真实 PostgreSQL 回归测试，覆盖 `CountDSL` /
+  `QueryDSL` / `QueryDSLInScope` 三个调用方。
+
 ## [0.4.77] - 2026-11-16
 
 ### 增强（issue #13 跟进）
