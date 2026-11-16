@@ -124,7 +124,9 @@ type Tool struct {
 	Dnf string `json:"-"`
 
 	// kind=github: owner/repo + 资产名模板({ver} 不带 v,{arch} = amd64|arm64)
-	// + 压缩包内二进制名(空 = 与 Bin 同名)
+	// + 压缩包内二进制名(空 = 与 Bin 同名)。
+	// AssetTmpl 支持 "候选1||候选2" 多候选：404 时依次尝试（上游资产命名随
+	// 版本/架构变化的工具用，如 feroxbuster v2.14 起 arm64 只发 .zip）。
 	Repo      string `json:"-"`
 	AssetTmpl string `json:"-"`
 	BinInZip  string `json:"-"`
@@ -329,9 +331,11 @@ chmod +x /usr/local/bin/kubectl
 	{Name: "dalfox", Purpose: "XSS 扫描与利用(反射型/存储型/DOM)", Kind: KindGitHub, Category: CatWeb,
 		Repo: "hahwul/dalfox", AssetTmpl: "dalfox-{verv}-linux-{arch2}.tar.gz"},
 	// feroxbuster：目录/文件爆破（Rust 版 gobuster 替代）。
-	// 注意它的资产名**架构在前**，且 amd64 用 x86_64、arm64 用 aarch64。
+	// 注意它的资产名**架构在前**，且 amd64 用 x86_64、arm64 用 aarch64；
+	// v2.14 起 arm64 只发 .zip（amd64 两种都有）——资产名用 || 分隔多候选，
+	// 下载端 404 时依次尝试（hostd 与 install.sh 的表驱动都实现了该语义）。
 	{Name: "feroxbuster", Purpose: "目录/文件爆破(Rust 版,支持多线程与递归)", Kind: KindGitHub, Category: CatWeb,
-		Repo: "epi052/feroxbuster", AssetTmpl: "{arch2}-linux-feroxbuster.tar.gz"},
+		Repo: "epi052/feroxbuster", AssetTmpl: "{arch2}-linux-feroxbuster.zip||{arch2}-linux-feroxbuster.tar.gz"},
 	// ── 红队后渗透补齐（2026-10-30）：权限保持/横向/隧道/凭据 ──
 	// socat：nc 的全能替代（双向管道、TLS、转发），反弹 shell 稳定化的标配。
 	{Name: "socat", Purpose: "多用途网络中继(反弹 shell 稳定化/端口转发)", Kind: KindApt, Category: CatPivot,

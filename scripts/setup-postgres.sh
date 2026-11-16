@@ -124,7 +124,7 @@ sys.exit(0 if (isinstance(db,dict) and db.get("dsn")) else 1)
 PY
   }
   if cfg_has_dsn; then
-    warn "config.json 使用了 database.dsn，分字段配置被忽略；本脚本仍按分字段建库。"
+    die "config.json 使用 database.dsn（完整连接串）：本脚本的分字段建库/回写密码不会影响服务的实际连接，继续执行会造成「配置完成但连不上」的假完成。请手动处理，或把 config.json 改为分字段写法后再运行。"
   fi
 else
   info "未找到 $CONFIG，将按默认值新建：user/db=pojun，host=127.0.0.1:5432"
@@ -144,6 +144,14 @@ if [ -z "$DB_PASS" ]; then
 fi
 
 # ---------- 检查前置 ----------
+# SQL 标识符/字面量按单引号拼接，值里出现单引号会破坏语句——显式拒绝而不是静默坏掉。
+for _v in "$DB_USER" "$DB_NAME"; do
+  case "$_v" in *"'"*) die "标识符不能包含单引号：$_v";; esac
+done
+if [ -n "$DB_PASS" ]; then
+  case "$DB_PASS" in *"'"*) die "密码不能包含单引号（请换用不含 ' 的密码）";; esac
+fi
+
 command -v psql >/dev/null 2>&1 || die "psql 不在 PATH，请先安装 PostgreSQL 客户端"
 if command -v pg_isready >/dev/null 2>&1; then
   pg_isready -h "$DB_HOST" -p "$DB_PORT" >/dev/null 2>&1 \
