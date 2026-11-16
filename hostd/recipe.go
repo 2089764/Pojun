@@ -175,9 +175,9 @@ func pipArgv(tool hosttools.Tool, proxy string) []string {
 //
 // 各项目的资产命名差异很大（架构在前/后、版本带不带 v、扩展名 .zip/.tar.gz/.gz），
 // 所以模板必须能覆盖这些差异，否则「一键安装」只能对着一半项目有效。
-func GitHubAssetURL(tool hosttools.Tool, tag string) string {
+func GitHubAssetURL(tool hosttools.Tool, assetTmpl, tag string) string {
 	ver := strings.TrimPrefix(tag, "v")
-	asset := strings.ReplaceAll(tool.AssetTmpl, "{ver}", ver)
+	asset := strings.ReplaceAll(assetTmpl, "{ver}", ver)
 	asset = strings.ReplaceAll(asset, "{verv}", tag)
 	asset = strings.ReplaceAll(asset, "{arch}", hosttools.Arch())
 	asset = strings.ReplaceAll(asset, "{arch2}", hosttools.ArchAlt())

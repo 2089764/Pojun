@@ -1348,7 +1348,30 @@ esac
 
 if [ "$WITH_TOOLS" = "1" ]; then
   if [ "$IS_MAC" = "1" ]; then
-    warn "--with-tools 在 macOS 不可用（工具安装器是 apt/dnf 体系）；请 brew install 按需装"
+    # macOS：apt/dnf 体系不可用，改用 Homebrew 逐包 best-effort 安装核心件
+    # （渗透/GitHub 工具组按需 brew install；装不上的体检页如实显示）。
+    if ! command -v brew >/dev/null 2>&1; then
+      warn "未检测到 Homebrew，先安装它（可能要求输入密码/回车确认）..."
+      /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
+        || die "Homebrew 安装失败"
+      eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || true)"
+      eval "$(/usr/local/bin/brew shellenv 2>/dev/null || true)"
+    fi
+    BREW_PREFIX="$(brew --prefix)"
+    export PATH="$BREW_PREFIX/bin:$BREW_PREFIX/opt/postgresql@16/bin:$PATH"
+    info "Homebrew 安装核心依赖（PostgreSQL/文档渲染/渗透工具组，逐包容错）..."
+    for pkg in postgresql@16 poppler imagemagick nmap masscan sqlmap hydra whatweb nikto \
+               gobuster ffuf john gitleaks dnsutils; do
+      brew list --formula 2>/dev/null | grep -q "^${pkg}@\|^${pkg}$" \
+        || brew install "$pkg" >/dev/null 2>&1 \
+        || warn "  brew 缺包: $pkg"
+    done
+    # LibreOffice 是 cask：装完把 soffice 软链进 PATH，报告 docx→PDF 才能找到它。
+    if [ ! -x "$BREW_PREFIX/bin/soffice" ] && [ -x "/Applications/LibreOffice.app/Contents/MacOS/soffice" ]; then
+      ln -sf "/Applications/LibreOffice.app/Contents/MacOS/soffice" "$BREW_PREFIX/bin/soffice"
+      ok "soffice 已软链 → $BREW_PREFIX/bin/soffice"
+    fi
+    ok "macOS 核心件安装完成（brew install 按需补其余工具）"
   else
     install_tools
   fi

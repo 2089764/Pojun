@@ -10,6 +10,14 @@
 #   cp -r web/out server/webui/dist
 #   CGO_ENABLED=0 GOARCH=amd64 go build -tags embedui -o dist/amd64/pojun ./cmd/pojun
 #   docker build -t pojun:local .
+# kerbrute / waybackurls 上游不发 linux/arm64 资产，用 Go 现场编译补齐
+# （builder 走目标平台的 golang 镜像，产物架构自动正确；QEMU 下只编译这两个
+# 小工具，构建时间增加可控）。
+FROM golang:1.26-bookworm AS gobuild
+ENV CGO_ENABLED=0 GOBIN=/go/bin
+RUN go install github.com/ropnop/kerbrute@v1.0.3 \
+    && go install github.com/tomnomnom/waybackurls@v0.1.0
+
 FROM python:3.11-slim-bookworm
 ARG TARGETARCH
 # 构建源（默认官方；国内/受限网络用 --build-arg 覆盖）：
@@ -41,6 +49,9 @@ RUN apt-get update \
     && curl -fsSL "$NODESOURCE_URL" | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
+# kerbrute/waybackurls（上游无 arm64 资产，builder 现场编译）
+COPY --from=gobuild /go/bin/kerbrute /usr/local/bin/kerbrute
+COPY --from=gobuild /go/bin/waybackurls /usr/local/bin/waybackurls
 # nuclei(漏洞模板扫描引擎,配合 /app/nuclei-templates 情报模板库):
 # 官方 release 单二进制按架构下载,模板树由 pojun 的 vulnintel 同步器维护
 # (git clone --depth 1 到 /app/nuclei-templates,每轮同步 git pull 更新)。
@@ -80,7 +91,7 @@ COPY dist/${TARGETARCH}/pojun-hostd /app/pojun-hostd
 # 它同时负责把 SIGTERM 转发给 pojun —— docker stop 只把信号发给 PID 1，
 # 不转发的话 pojun 收不到、做不了优雅关闭，10 秒后被 SIGKILL 硬杀。
 COPY start.sh /app/start.sh
-RUN chmod +x /app/pojun /app/start.sh
+RUN chmod +x /app/pojun /app/pojun-hostd /app/start.sh
 COPY skills/ /app/skills/
 # 公文字体：docx→PDF 渲染需要（install.sh 二进制形态从 raw 下载；镜像直接 COPY 仓库内文件）
 COPY report/fonts/ /usr/share/fonts/gongwen/

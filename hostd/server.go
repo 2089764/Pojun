@@ -370,35 +370,52 @@ func (s *Server) runGitHub(ctx context.Context, j *Job, tool hosttools.Tool, pro
 	if err != nil {
 		return 1, fmt.Errorf("解析最新版本失败(可配置安装代理后重试): %w", err)
 	}
-	u := GitHubAssetURL(tool, tag)
-	j.append(fmt.Sprintf("[*] 下载 %s\n", u))
+	// 资产名支持 "候选1||候选2" 多候选：上游资产命名随版本/架构变化（feroxbuster
+	// v2.14 起 arm64 只发 .zip），404 时依次尝试每个候选。
+	var urls []string
+	for _, tmpl := range strings.Split(tool.AssetTmpl, "||") {
+		if tmpl = strings.TrimSpace(tmpl); tmpl != "" {
+			urls = append(urls, GitHubAssetURL(tool, tmpl, tag))
+		}
+	}
+	if len(urls) == 0 {
+		urls = []string{GitHubAssetURL(tool, tool.AssetTmpl, tag)}
+	}
 
 	var blob []byte
 	var lastErr error
-	for attempt := 1; attempt <= 3; attempt++ {
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-		req.Header.Set("User-Agent", "pojun-hostd")
-		resp, err := client.Do(req)
-		if err == nil && resp.StatusCode == http.StatusOK {
-			blob, err = io.ReadAll(io.LimitReader(resp.Body, 128<<20))
-			resp.Body.Close()
-			if err == nil && len(blob) > 0 {
-				lastErr = nil
-				break
+	for _, u := range urls {
+		j.append(fmt.Sprintf("[*] 下载 %s\n", u))
+
+		for attempt := 1; attempt <= 3; attempt++ {
+			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+			req.Header.Set("User-Agent", "pojun-hostd")
+			resp, err := client.Do(req)
+			if err == nil && resp.StatusCode == http.StatusOK {
+				blob, err = io.ReadAll(io.LimitReader(resp.Body, 128<<20))
+				resp.Body.Close()
+				if err == nil && len(blob) > 0 {
+					lastErr = nil
+					break
+				}
+			} else if err == nil {
+				err = fmt.Errorf("HTTP %d", resp.StatusCode)
+				resp.Body.Close()
 			}
-		} else if err == nil {
-			err = fmt.Errorf("HTTP %d", resp.StatusCode)
-			resp.Body.Close()
-		}
-		lastErr = err
-		if attempt < 3 {
-			j.append(fmt.Sprintf("[warn] 下载失败（%v），%d 秒后重试…\n", err, attempt*2))
-			select {
-			case <-ctx.Done():
-				return 1, ctx.Err()
-			case <-time.After(time.Duration(attempt*2) * time.Second):
+			lastErr = err
+			if attempt < 3 {
+				j.append(fmt.Sprintf("[warn] 下载失败（%v），%d 秒后重试…\n", err, attempt*2))
+				select {
+				case <-ctx.Done():
+					return 1, ctx.Err()
+				case <-time.After(time.Duration(attempt*2) * time.Second):
+				}
 			}
 		}
+		if len(blob) > 0 {
+			break // 本候选下载成功
+		}
+		// 全部重试失败 → 换下一个候选资产（未命中 404 时换 URL 也没意义，直接结束）
 	}
 	if lastErr != nil {
 		return 1, fmt.Errorf("下载失败: %w", lastErr)

@@ -4,6 +4,42 @@
 
 ## [Unreleased]
 
+## [0.4.73] - 2026-11-16
+
+> macOS 适配完善（Apple Silicon 实测反馈）+ DeepSeek 配置文档。安装形态专项的收尾。
+
+### 修复
+
+- **Docker 镜像 pojun-hostd 缺执行位**：chmod 漏了 v0.4.69 新增的 hostd，容器内
+  「宿主环境」一键安装与首启 catalog 预装整段跳过（Apple Silicon 用户 36/90）——补齐
+  后恢复 hostd 启动 + 预装链路。
+- **预装完成标记移到容器层**：标记原在 data 持久卷，镜像升级重建容器后「工具没了、
+  标记还在」→ 永久跳过预装、工具静默消失。标记随容器生命周期走，重建即重跑（预装幂等）。
+- **feroxbuster arm64 404**：v2.14 起 arm64 只发 `.zip` 资产，资产模板支持 `||` 多候选
+  依次尝试（404 时换下一候选，hostd 与 install.sh 表驱动同步支持）。
+- **kerbrute / waybackurls arm64**：上游不发 linux/arm64 资产——Dockerfile 加 golang
+  构建阶段现场编译（QEMU 下增量可控），arm64 Docker 用户补齐这两项。
+- **netexec arm64**：依赖 aardwolf 需 Rust ≥ 新版，Debian bookworm 自带 rustc 过旧——
+  catalog 条目 Install 提示补 rustup 配方说明（不静默失败）。
+
+### 新增
+
+- **docker-compose.macos.yml**：macOS 的 data 卷改 named volume（bind mount 走
+  VirtioFS/gRPC-FUSE，小文件 I/O 慢一个量级——流量/证据是小文件密集型），预映射回连
+  端口 4444-4450，附 manual LHOST（宿主局域网 IP）说明。
+- **install.sh --with-tools 的 macOS 分支**：Homebrew 检测/安装 + 核心依赖逐包容错
+  （PostgreSQL 16/poppler/imagemagick/渗透工具组）+ LibreOffice cask 安装后自动软链
+  soffice 进 PATH——不再静默跳过。
+- README 快速开始补 macOS Docker 命令；部署手册补 macOS Docker 部署章节（回连
+  manual LHOST 配方：`ipconfig getifaddr en0` + 端口 1:1 映射）。
+
+### 说明
+
+- LLM：DeepSeek 即 OpenAI 兼容端点，LLM 配置页直接可用（base_url
+  `https://api.deepseek.com` + deepseek-chat/deepseek-reasoner）；README 已补示例，
+  多通道轮询/熔断/故障转移对 DeepSeek 同样生效。
+
+
 ### 修复（社区反馈）
 
 - **#8 idle-stop 同轮并发跳档终结**：同一 assistant 回合并发发出多个 tool_use 时，
