@@ -387,7 +387,9 @@ var findingBrackets = regexp.MustCompile(`[（(【\[][^）)】\]]*[）)】\]]`)
 // 有了定位键就能区分，同时仍把「同一漏洞换证据再报一次」合并掉。
 var (
 	findingCVERe  = regexp.MustCompile(`(?i)\bCVE-\d{4}-\d{4,}\b`)
-	findingURLRe  = regexp.MustCompile(`(?i)https?://[^\s"'<>）)，,]+`)
+	// 排除字符同时覆盖半角与全角标点。此前未排除全角左括号（U+FF08），
+	// 「http://host（说明文字」会被整段吞进 URL，导致解析失败并产生垃圾键。
+	findingURLRe = regexp.MustCompile(`(?i)https?://[^\s"'<>（）()【】\[\]，,。；;]+`)
 	findingPathRe = regexp.MustCompile(`(/[a-zA-Z0-9_\-./]{3,})`)
 	findingPortRe = regexp.MustCompile(`(?i)(?:端口|port)\s*[:=]?\s*(\d{1,5})`)
 )
@@ -401,7 +403,8 @@ func findingLocator(in RecordFindingInput) string {
 		if u, err := url.Parse(m); err == nil && u.Host != "" {
 			return strings.ToLower(u.Host + u.EscapedPath())
 		}
-		return strings.ToLower(m)
+		// 解析失败时不回退成原文小写：那会把标点连带的片段写进指纹，
+		// 让同一条漏洞因为措辞不同算出不同指纹。继续尝试路径/端口特征。
 	}
 	if m := findingPathRe.FindString(text); m != "" {
 		return strings.ToLower(strings.TrimRight(m, "/."))
