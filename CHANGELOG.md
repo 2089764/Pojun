@@ -4,6 +4,25 @@
 
 ## [Unreleased]
 
+## [0.4.77] - 2026-11-16
+
+### 增强（issue #13 跟进）
+
+- **LLM UA 模板补齐主流编程工具**：v0.4.76 只内置了浏览器 UA，但 coding agent
+  的 UA 是另一种形态——`工具名/版本 (平台; 架构) 终端` 或
+  `工具名/版本 sdk/... runtime/...`，不少按客户端类型放行的网关只认这些前缀。
+  本次新增 10 个模板：
+  - Claude Code：`claude-cli/2.1.63 (external, cli)`
+  - Codex CLI（macOS / Windows 两个模板）：`codex_cli_rs/0.144.6 (...) ...`
+  - Gemini CLI：`GeminiCLI/0.46.0/gemini-3-pro-preview (linux; x64; cli)`
+  - OpenCode：`opencode/1.18.29 ai-sdk/... runtime/bun/...`
+  - Zed：`Zed/0.219.4+stable.119.0 (macos; aarch64)`
+  - GitHub Copilot CLI / Copilot Chat（VS Code）
+  - Roo Code / Kilo Code
+  模板值取自真实抓包与上游源码；版本号、终端信息可直接在输入框里改。设置页下拉
+  按「编程工具 / 浏览器」分组。仅覆盖 User-Agent；若网关还校验配套头或鉴权，
+  需按其要求另行配置。
+
 ## [0.4.76] - 2026-11-16
 
 ### 新增（issue #13）

@@ -108,7 +108,7 @@ Recorder 按 profile 各包一层，因此**失败尝试也归属在它自己的
 ## 七、会话头 / 代理 / 429→402 归一化
 
 - **会话头**：`session_header_key` 非空时每个请求带一个自定义 HTTP 头，头值 = 当前会话 id（从 ctx 上读 `transcript.SessionIDFrom`，`agent/provider.go:338-347`）。服务的是按 session-id 做提示缓存/粘性路由的网关（如 opencode zen 缺此头直接 400）。同一共享 provider 也能按会话发不同头值，因为值挂在请求 ctx 而非 provider 上。
-- **User-Agent**：`user_agent` 非空时替换每个模型请求的 UA（`agent/provider.go:377-384`）。默认空 = 保持 SDK/Go 的 `Go-http-client/1.1`；部分网关/WAF 会直接拦截该默认特征，设置页提供 Chrome/Safari/Edge/Firefox 等 7 个浏览器模板，也可手填。注入点在 `quotaAwareTransport`，因此 SDK 的建连重试、空响应重试以及「测试连接」「加载模型」发出的请求都会带上；保存 profile 后即时生效。保存路径拒绝 CR/LF（`server/server_mgmt.go`），transport 侧还会把控制字符替换成空格，防止直接改库绕过校验。
+- **User-Agent**：`user_agent` 非空时替换每个模型请求的 UA（`agent/provider.go:377-384`）。默认空 = 保持 SDK/Go 的 `Go-http-client/1.1`；部分网关/WAF 会直接拦截该默认特征。设置页按两组提供模板：**编程工具**（Claude Code、Codex CLI、Gemini CLI、OpenCode、Zed、GitHub Copilot、Roo Code、Kilo Code——这些 UA 是 `工具名/版本 (平台; 架构) 终端` 或 `工具名/版本 sdk/... runtime/...` 形态，与浏览器完全不同）和**浏览器**（Chrome/Safari/Edge/Firefox 等），也可手填。注入点在 `quotaAwareTransport`，因此 SDK 的建连重试、空响应重试以及「测试连接」「加载模型」发出的请求都会带上；保存 profile 后即时生效。保存路径拒绝 CR/LF（`server/server_mgmt.go`），transport 侧还会把控制字符替换成空格，防止直接改库绕过校验。
 - **代理**：`proxy` 支持 http/https/socks5；**空 = 直连且不回退 *_PROXY 环境变量**（`agent/provider.go:400-419`，显式置 `transport.Proxy=nil`）——LLM 出口是用户明确配置的边界，不该被环境变量意外改道。这和目标流量的全局出口代理（`m.ProxyAddr`）是两条独立的链路。
 - **429→402 归一化**：`quotaAwareTransport` 拦截 429 响应，body 命中 `IsQuotaExhaustedMessage` 时把状态码改写成 402 再返回（`agent/provider.go:364-379`）。原因：SDK 的重试循环把所有 429 当瞬时；不归一化的话欠费配置会被空转重试烧完才轮换，改写后任务路由立刻转移，同时保留原始 body 供分类与审计。tee 而非读：200 是必须继续流式输送的 SSE，429 分支读的 body 经 tee 落进 Capture。
 

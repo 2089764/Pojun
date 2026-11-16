@@ -21,7 +21,16 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import {
@@ -75,11 +84,64 @@ const EFFORT_LEVELS: { value: string; label: string }[] = [
   { value: "max", label: "max" },
 ];
 
-// LLM 请求 UA 的常用模板。选模板只是把完整 UA 填进输入框，之后仍可继续手改；
-// 第一项 ua="" = 不覆盖，保持 SDK/Go 默认（Go-http-client/1.1）。
+// LLM 请求 UA 的常用模板。选模板只是把完整 UA 填进输入框，之后仍可继续手改。
+// 浏览器 UA 与编程工具（CLI/IDE）UA 是两类完全不同的特征：后者常用
+// `工具名/版本 (平台; 架构) 终端` 或 `工具名/版本 sdk/... runtime/...` 的形态，
+// 不少按客户端类型放行的网关只认这些前缀。模板里的版本号/终端信息可自行改。
 const CUSTOM_UA = "custom";
-const UA_PRESETS: { value: string; label: string; ua: string }[] = [
-  { value: NONE, label: "不覆盖（默认 Go UA）", ua: "" },
+const UA_TOOL_PRESETS: { value: string; label: string; ua: string }[] = [
+  {
+    value: "claude-code",
+    label: "Claude Code · CLI",
+    ua: "claude-cli/2.1.63 (external, cli)",
+  },
+  {
+    value: "codex-mac",
+    label: "Codex CLI · macOS",
+    ua: "codex_cli_rs/0.144.6 (Mac OS 15.6.1; arm64) ghostty/1.3.0",
+  },
+  {
+    value: "codex-win",
+    label: "Codex CLI · Windows",
+    ua: "codex_cli_rs/0.144.6 (Windows 11 24H2; x86_64) vscode/1.105.1",
+  },
+  {
+    value: "gemini-cli",
+    label: "Gemini CLI",
+    ua: "GeminiCLI/0.46.0/gemini-3-pro-preview (linux; x64; cli)",
+  },
+  {
+    value: "opencode",
+    label: "OpenCode",
+    ua: "opencode/1.18.29 ai-sdk/openai-compatible/2.0.41 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.15",
+  },
+  {
+    value: "zed",
+    label: "Zed · AI",
+    ua: "Zed/0.219.4+stable.119.0 (macos; aarch64)",
+  },
+  {
+    value: "copilot-cli",
+    label: "GitHub Copilot CLI",
+    ua: "copilot/1.0.25 (client/sdk win32 v22.19.0) term/unknown",
+  },
+  {
+    value: "copilot-vscode",
+    label: "GitHub Copilot Chat · VS Code",
+    ua: "GitHubCopilotChat/0.37.2026011603",
+  },
+  {
+    value: "roo-code",
+    label: "Roo Code",
+    ua: "roo-code/3.45.0 (darwin 25.2.0; arm64) node/22.21.1",
+  },
+  {
+    value: "kilo-code",
+    label: "Kilo Code",
+    ua: "kilo-code/5.1.0 (darwin 25.2.0; arm64) node/22.21.1",
+  },
+];
+const UA_BROWSER_PRESETS: { value: string; label: string; ua: string }[] = [
   {
     value: "chrome-win",
     label: "Chrome · Windows",
@@ -115,6 +177,12 @@ const UA_PRESETS: { value: string; label: string; ua: string }[] = [
     label: "Firefox · Windows",
     ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0",
   },
+];
+// 第一项 ua="" = 不覆盖，保持 SDK/Go 默认（Go-http-client/1.1）。
+const UA_PRESETS = [
+  { value: NONE, label: "不覆盖（默认 Go UA）", ua: "" },
+  ...UA_TOOL_PRESETS,
+  ...UA_BROWSER_PRESETS,
 ];
 
 function cooldownText(secs: number) {
@@ -693,11 +761,26 @@ function ProfileSheet({
                 <SelectValue placeholder="选择常用 UA 模板" />
               </SelectTrigger>
               <SelectContent>
-                {UA_PRESETS.map((p) => (
-                  <SelectItem key={p.value} value={p.value}>
-                    {p.label}
-                  </SelectItem>
-                ))}
+                <SelectItem value={NONE}>不覆盖（默认 Go UA）</SelectItem>
+                <SelectSeparator />
+                <SelectGroup>
+                  <SelectLabel>编程工具（CLI / IDE）</SelectLabel>
+                  {UA_TOOL_PRESETS.map((p) => (
+                    <SelectItem key={p.value} value={p.value}>
+                      {p.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+                <SelectSeparator />
+                <SelectGroup>
+                  <SelectLabel>浏览器</SelectLabel>
+                  {UA_BROWSER_PRESETS.map((p) => (
+                    <SelectItem key={p.value} value={p.value}>
+                      {p.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+                <SelectSeparator />
                 <SelectItem value={CUSTOM_UA}>自定义（在下方输入）</SelectItem>
               </SelectContent>
             </Select>
@@ -710,8 +793,10 @@ function ProfileSheet({
             />
             <p className="text-muted-foreground text-xs">
               非空时替换<b>每个 LLM 请求</b>的 User-Agent（含重试）。部分网关 / WAF
-              会直接拦截默认的 Go UA（表现为 403、连接被重置），选一个浏览器模板即可；
-              选完可继续手动修改。只影响 LLM 出站请求，不影响对渗透目标的任何请求。
+              会直接拦截默认的 Go UA（表现为 403、连接被重置），选一个模板即可；按客户端类型
+              放行的网关（Claude Code / Codex / Gemini CLI / OpenCode 等）请选「编程工具」组，
+              版本号与终端信息可继续手动修改。只影响 LLM 出站请求，不影响对渗透目标的任何请求。
+              个别网关还会校验配套请求头或鉴权（仅改 UA 不一定能通过其订阅校验）。
             </p>
           </div>
 
