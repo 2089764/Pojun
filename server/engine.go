@@ -2,11 +2,11 @@ package server
 
 import (
 	"context"
-	"path/filepath"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -338,6 +338,10 @@ func (e *Engine) Resume(t *Task) {
 		return
 	}
 	e.paused.Delete(t.ID)
+	// 暂停期间看门狗不更新 lastProgressAt；恢复时若保留旧值，下一个 tick 会把
+	// 暂停时长算成「无进展」，立即误触发 stall_nudge 并推进 deadline 延长计数。
+	// 恢复即重新计时。
+	e.autoTrack.Delete(t.ID)
 	t.Notify()
 }
 

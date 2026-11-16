@@ -4,6 +4,30 @@
 
 ## [Unreleased]
 
+## [0.4.80] - 2026-11-17
+
+### 修复（issue #17 / #18 / #20 / #21.3 / #22）
+
+- **workspace 符号链接可绕过受保护目录（#17）**：`wsProtected` 原先按词法路径
+  判断，`data/alias -> data/traffic` 后写入 `alias/...` 会落进 traffic。改为按
+  `EvalSymlinks` 后的真实路径判断（目标不存在时解析最近存在的父目录），upload
+  对每个最终文件再检查一次，覆盖 write/mkdir/upload/delete；新增回归测试。
+- **暂停与 job_start 并发漏杀（#18）**：`job_start` 先启动进程、后写元数据，
+  暂停清理只扫描一次，可能漏掉在途作业。引入进程内作业生命周期读写锁：
+  `job_start` 持读锁覆盖「启动+登记」，`KillJobsForTaskDir` 持写锁等待登记
+  完成后再扫描；`job_start` 启动前检查执行上下文，元数据写失败立即杀进程组。
+  新增确定性并发测试。
+- **prove_goal 能力型目标可被普通 fact 绕过（#20）**：目标要求 RCE/命令执行/
+  控制权/敏感数据等能力结果时，只接受 high/critical 的 finding 作为证据，
+  fact 与 low/medium finding 会被拒绝；「是否存在/排查」类存在性目标不受影响。
+  新增单元与 PostgreSQL 集成测试。
+- **ExecuteExtraTool 绕过按工具配置的拦截规则（#21.3）**：guard 在 Pre/Post
+  hook 中解包 norma 的 `tool_name` + `params`，规则匹配、Judge 与审计都看真实
+  内层工具；内层 Bash 的命令也能被规则命中。新增两条端到端测试。
+- **暂停恢复后停滞计时与 deadline 预算偏差（#22）**：新增 `tasks.paused_at`，
+  恢复时按暂停时长顺延 `deadline_at`；`Engine.Resume` 清除 autopilot 基线，
+  避免把暂停时长误判为「无进展」并误触发 stall_nudge。
+
 ## [0.4.79] - 2026-11-17
 
 ### 修复（感谢 @FldBudin 的 PR #19）

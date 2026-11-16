@@ -447,9 +447,19 @@ func (d *DB) GetTask(id int64) (*Task, error) {
 	return t, nil
 }
 
-// SetPaused persists a task's paused flag.
+// SetPaused persists a task's paused flag. Pausing stamps paused_at and
+// unpausing folds the paused duration into deadline_at (same budget semantics as
+// the manager admission path).
 func (d *DB) SetPaused(id int64, paused bool) error {
-	_, err := d.Exec(`UPDATE tasks SET paused=$1 WHERE id=$2`, paused, id)
+	_, err := d.Exec(`UPDATE tasks SET
+		paused=$1,
+		paused_at=CASE WHEN $1 THEN COALESCE(paused_at, now()) ELSE NULL END,
+		deadline_at=CASE
+			WHEN NOT $1 AND paused_at IS NOT NULL AND deadline_at IS NOT NULL
+			THEN deadline_at + (now() - paused_at)
+			ELSE deadline_at
+		END
+		WHERE id=$2`, paused, id)
 	return err
 }
 

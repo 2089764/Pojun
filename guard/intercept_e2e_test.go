@@ -154,3 +154,34 @@ func TestE2ERuleWithoutTimeoutUsesGlobal(t *testing.T) {
 		t.Errorf("规则未启用 timeout 时应走全局 180s，实际 %v", seen)
 	}
 }
+
+// ExecuteExtraTool 必须解包到内层工具：规则按真实工具名/参数匹配，而不是
+// 只看外层包装器。真实入参字段是 norma SDK 的 tool_name + params。
+func TestE2EExecuteExtraToolUnwrapsInnerTool(t *testing.T) {
+	ic := intercept.New(nil)
+	rule := e2eRule(1, "[测试] 禁止危险自定义工具", `^Bash$`, "deny", 100, false, 60, "deny")
+	rule.MatchTarget = "tool_name"
+	ic.SetRulesInMemory([]db.InterceptRule{rule})
+	g := NewWithInterceptor(ic)
+
+	input := json.RawMessage(`{"tool_name":"Bash","params":{"command":"echo hi"}}`)
+	blocked, _, _ := g.Hooks().PreToolUse(context.Background(), "ExecuteExtraTool", input)
+	if !blocked {
+		t.Fatal("ExecuteExtraTool 内层 Bash 未被按工具名规则拦截")
+	}
+}
+
+// 内层参数也要交给规则层：外层入参只有包装字段，不解包则命令特征永远不命中。
+func TestE2EExecuteExtraToolUnwrapsInnerInput(t *testing.T) {
+	ic := intercept.New(nil)
+	ic.SetRulesInMemory([]db.InterceptRule{
+		e2eRule(1, "[测试] 危险参数", `(?i)\bforbidden-flag\b`, "deny", 100, false, 60, "deny"),
+	})
+	g := NewWithInterceptor(ic)
+
+	input := json.RawMessage(`{"tool_name":"Bash","params":{"command":"run --forbidden-flag"}}`)
+	blocked, _, _ := g.Hooks().PreToolUse(context.Background(), "ExecuteExtraTool", input)
+	if !blocked {
+		t.Fatal("ExecuteExtraTool 内层 params 未参与规则匹配")
+	}
+}

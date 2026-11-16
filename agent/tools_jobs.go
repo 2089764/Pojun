@@ -33,10 +33,22 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	actool "github.com/Autumn-27/norma/tool"
 )
+
+// jobLifecycleMu 串行化「作业启动+登记」与「暂停/删除清理」。
+//
+// job_start 从开始启动到元数据落盘必须持读锁；KillJobsForTaskDir 持写锁。
+// 没有这把锁时，清理会扫描不到「进程已启动、JSON 还没写」的作业，暂停后它
+// 继续在后台打目标（issue #18）。锁是进程内全局的：job 启停频率很低，没必要
+// 为每个任务目录维护一张锁表。
+var jobLifecycleMu sync.RWMutex
+
+// jobStartAfterStartHook 仅测试使用：进程已启动、元数据尚未落盘。生产恒为 nil。
+var jobStartAfterStartHook func()
 
 type jobMeta struct {
 	Name     string `json:"name"`
@@ -138,7 +150,7 @@ func (t *ToolSet) jobStart() actool.CoreTool {
 			"command": str("要执行的 bash 命令（工作目录为任务 shared 目录）"),
 			"env":     str("额外环境变量，'K=V&K2=V2'（可选）"),
 		}, "name", "command"),
-		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
+		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 			var a struct {
 				Name    string `json:"name"`
 				Command string `json:"command"`
@@ -155,6 +167,14 @@ func (t *ToolSet) jobStart() actool.CoreTool {
 			dir := t.jobsDir()
 			if dir == "" {
 				return actool.Errorf("任务共享目录不可用（runDir 未注入）"), nil
+			}
+			// 暂停/删除清理（KillJobsForTaskDir）持写锁。这里把「启动 + 元数据落盘」
+			// 整体放进读锁：清理要么在启动前完成（随后 ctx 检查拒绝），要么等登记
+			// 完成后再扫到并杀掉，不会漏掉中途启动的作业。
+			jobLifecycleMu.RLock()
+			defer jobLifecycleMu.RUnlock()
+			if err := ctx.Err(); err != nil {
+				return actool.Errorf("任务已暂停或执行已取消，拒绝启动后台作业"), nil
 			}
 			script := filepath.Join(dir, name+".sh")
 			logPath := filepath.Join(dir, name+".log")
@@ -198,8 +218,14 @@ func (t *ToolSet) jobStart() actool.CoreTool {
 				}
 			}
 			cmd.Env = env
+			if err := ctx.Err(); err != nil {
+				return actool.Errorf("任务已暂停或执行已取消，拒绝启动后台作业"), nil
+			}
 			if err := cmd.Start(); err != nil {
 				return actool.Errorf("启动作业失败: " + err.Error()), nil
+			}
+			if jobStartAfterStartHook != nil {
+				jobStartAfterStartHook()
 			}
 			pid := cmd.Process.Pid
 			// 作业跨 run 存活：用后台 Wait 收尸，不能 Release——Release 不回收子进程，
@@ -211,8 +237,16 @@ func (t *ToolSet) jobStart() actool.CoreTool {
 				Script:  script, Log: logPath, RCFile: rcPath,
 				Intent: t.ownerNode,
 			}
-			if b, err := json.MarshalIndent(m, "", "  "); err == nil {
-				_ = os.WriteFile(metaPath, b, 0o644)
+			b, err := json.MarshalIndent(m, "", "  ")
+			if err == nil {
+				err = os.WriteFile(metaPath, b, 0o644)
+			}
+			if err != nil {
+				// 元数据写不进去 = 这个进程永远不在作业台账里，暂停/删除都找不到它。
+				// 立刻杀掉整组，不能留一个不可追踪的后台进程。
+				_ = jobKillGroup(pid)
+				jobWaitGone(pid, 2*time.Second)
+				return actool.Errorf("写作业元数据失败（已终止进程）: " + err.Error()), nil
 			}
 			return jsonResult(map[string]any{
 				"name":   name,
