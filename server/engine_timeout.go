@@ -236,13 +236,24 @@ func taskGoalProgress(t *Task) (met, total int) {
 	return met, total
 }
 
-// settleTerminalStatus 计算收尾终态（红队版 v0.6.31 下放）。
+// settleTerminalStatus 计算收尾终态。
 //
-// 语义：只有「目标全部达成」才允许 done；存在未达成目标时，无论收尾原因是什么
+// 语义：任务有目标时以**数据库里的达成情况**为准——目标全部 met 才是 done；
+// 存在未 met 的目标（state=abandoned 按未达成计）时，无论收尾原因是什么
 // （超时 / 自动空转 / 覆盖度 / 轮数上限），终态一律 timeout——UI 据此显示
-// 「未完成」，而不是把做了一半的任务标成完成。totalGoals==0 的任务沿用旧语义。
-func settleTerminalStatus(allGoalsMet bool, reason string, finalRoundMet bool) string {
-	if !allGoalsMet {
+// 「未完成」，而不是把做了一半的任务标成完成。无目标（totalGoals==0）的任务
+// 沿用旧语义：由终局 planner 轮判定。
+//
+// 为什么不信 finalRoundMet（终局轮 planner 的返回值）：goal 的 met 只能由
+// prove_goal 写入，是逐条证据留下的既成事实，且没有工具能把它改回去；而
+// finalRoundMet 只表示「终局这一轮又调用了一次证明工具」。目标已全部 met 时
+// 终局轮没有可证明的对象，planner 通常直接回「无需再证明」，此时
+// finalRoundMet=false 并不提供任何相反证据，不能据此否定已成立的达成。
+func settleTerminalStatus(metGoals, totalGoals int, reason string, finalRoundMet bool) string {
+	if totalGoals > 0 {
+		if metGoals >= totalGoals {
+			return "done"
+		}
 		return "timeout"
 	}
 	if reason == "timeout" && !finalRoundMet {
@@ -257,9 +268,10 @@ func (e *Engine) settleTask(ctx context.Context, t *Task) {
 }
 
 // settleTaskWithReason 是统一收尾入口。reason:
-//   - timeout      任务绝对 deadline（终态 met?done:timeout）
+//   - timeout      任务绝对 deadline（终态按目标达成情况：全部 met→done，否则 timeout；
+//     无目标任务由终局轮判定）
 //   - goal_met     planner 明确判定目标达成且无在跑意图（不再跑终局轮，直接 done）
-//   - auto_idle / auto_coverage / auto_rounds 程序化自动收尾（终态 done）
+//   - auto_idle / auto_coverage / auto_rounds 程序化自动收尾（终态同样按目标达成情况判定）
 func (e *Engine) settleTaskWithReason(ctx context.Context, t *Task, reason, detail string) {
 	if !e.markSettling(t.ID, reason) {
 		return
@@ -314,14 +326,13 @@ func (e *Engine) settleTaskWithReason(ctx context.Context, t *Task, reason, deta
 	// ⑤′ 落终态前点名缺报告的漏洞（终局后不再派 worker，只能提示人补齐）。
 	e.warnFindingsWithoutReport(t)
 
-	// ⑥ 定终态(带守卫)：只有「目标全部被证明达成」才算 done。
+	// ⑥ 定终态(带守卫)：有目标时以数据库的达成情况为准（见 settleTerminalStatus）。
 	// 红队版 v0.6.31 下放：自动收尾（idle/coverage/轮数）与 goal_met 在目标未达成时
 	// 一律落 timeout，由界面显示「未完成·已停止」——旧的「自动收尾统一 done」正是
 	// 「只做了一部分却显示完成」的来源。
 	metGoals, totalGoals := taskGoalProgress(t)
-	allGoalsMet := totalGoals == 0 || metGoals >= totalGoals
-	status := settleTerminalStatus(allGoalsMet, reason, met)
-	if status == "timeout" && !allGoalsMet {
+	status := settleTerminalStatus(metGoals, totalGoals, reason, met)
+	if status == "timeout" && metGoals < totalGoals {
 		log.Printf("[settle] task %s 目标未全部达成(%d/%d)，终态记 timeout（未完成）而非 done", t.ID, metGoals, totalGoals)
 	}
 	won, err := e.m.SetTaskStatusGuarded(t.ID, status)
