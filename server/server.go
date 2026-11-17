@@ -891,6 +891,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/tools/inventory", s.toolsInventory)
 	// 宿主环境:体检(含一键安装可用性)+ 一键安装(经特权助手 pojun-hostd)
 	mux.HandleFunc("GET /api/hostenv/status", s.hostenvStatus)
+	mux.HandleFunc("PUT /api/hostenv/sources", s.hostenvSaveSources)
 	mux.HandleFunc("GET /api/c2/config", s.c2ConfigGet)
 	mux.HandleFunc("PUT /api/c2/config", s.c2ConfigPut)
 	mux.HandleFunc("GET /api/listeners", s.listenerList)

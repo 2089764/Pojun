@@ -49,6 +49,7 @@ import type {
   FindingTraffic,
   FindingTrafficDetail,
   HostenvStatus,
+  HostInstallSources,
   InstallBatchResult,
   InstallJob,
   ProxyCheckResult,
@@ -955,6 +956,7 @@ export const api = {
     }>(`/tools/inventory`),
   // 宿主环境:体检(含一键安装可用性)+ 一键安装(由特权助手 pojun-hostd 执行)
   hostenvStatus: () => get<HostenvStatus>(`/hostenv/status`),
+  hostenvSaveSources: (sources: HostInstallSources) => put<HostInstallSources>(`/hostenv/sources`, sources),
   hostenvInstall: (id: string) => post<InstallJob>(`/hostenv/install`, { id }),
   hostenvInstallBatch: (ids: string[]) => post<InstallBatchResult>(`/hostenv/install-batch`, { ids }),
   hostenvJob: (jobId: string) => get<InstallJob>(`/hostenv/jobs/${jobId}`),

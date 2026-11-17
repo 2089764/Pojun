@@ -24,6 +24,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { api } from "@/lib/api";
 import type { HostenvStatus, HostTool, InstallJob, ProxyCheckResult } from "@/lib/types";
 
+import { InstallSources } from "./install-sources";
+
 const TERMINAL_STATES = new Set(["done", "failed", "cancelled"]);
 
 const KIND_LABEL: Record<HostTool["kind"], string> = {
@@ -393,6 +395,14 @@ export default function HostEnvPage() {
                   目标流量）互不影响。代理随时可改，改完点「测试」确认通路——代理会失效， 装工具失败时先来这里看。
                 </p>
               </div>
+
+              {inv && (
+                <InstallSources
+                  sources={inv.installer.sources ?? { apt: "", pypi: "" }}
+                  supported={!!inv.installer.sources_supported}
+                  onSaved={(sources) => setInv((prev) => prev && { ...prev, installer: { ...prev.installer, sources } })}
+                />
+              )}
 
               {!installerReady && inv?.installer.reason && (
                 <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
