@@ -116,6 +116,9 @@ func (t *Task) requestSettle(reason, detail string) {
 	t.settleMu.Lock()
 	t.pendingSettleReason, t.pendingSettleDetail = reason, detail
 	t.settleMu.Unlock()
+	// 登记点必须留痕：「登记了」与「消费了」是收尾链上的两个独立事件，缺前者时
+	// 只能看到任务迟迟不结束而没有任何线索。
+	log.Printf("[settle] task %s 登记收尾判据 %s（%s）", t.ID, reason, detail)
 }
 
 func (t *Task) peekSettle() (string, string) {

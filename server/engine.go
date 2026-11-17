@@ -1253,41 +1253,7 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 			return planner.Plan(ctx, taskIDInt, e.m.assets, t.Store, t.Goal, triggers, emit)
 		})
 		e.EndLLMCall(t.ID)
-		switch {
-		case res.err != nil && roundCtx.Err() != nil && ectx.Err() == nil:
-			// 规划轮超时（本轮自身的墙钟上限到了，不是任务 deadline）。
-			//
-			// 这一支必须能走到：超时时本轮作废，runRound 正常结束，
-			// planner 恢复响应——下次唤醒再规划一轮。**不能**让它走进下面的
-			// "规划出错"分支后被静默吞掉，否则会退回「永久哑火」的旧症状。
-			log.Printf("[planner] task %s 规划轮超时(%s)，本轮作废，等下次唤醒重试", t.ID, plannerRoundLimit())
-		case res.err != nil && ectx.Err() == nil:
-			log.Printf("[planner] task %s 规划出错: %v", t.ID, res.err)
-		case res.met:
-			// 自主推进续杯：目标全部达成时先问一句「还有没有活可干」。有未测资产/
-			// 高危漏洞且波次没用完 → 自动追加下一层目标，本轮不取消 worker、不
-			// settle，当作「未完成」继续规划。
-			if e.maybeExtendAutopilot(t) {
-				res.met = false
-				break
-			}
-			log.Printf("[planner] task %s 判定目标达成: %s", t.ID, res.reason)
-			// 任务已判完成 → 立刻取消在跑的 worker：它们手头的意图跑出来也没意义了。
-			// 下一轮 worker 循环撞终态门就不再领新意图;被取消的这批走下方"任务已完成"分支
-			// 归为 stopped(而非 blocked)。
-			e.cancelExec(t.ID, agent.AbortGoalMet)
-		default:
-			log.Printf("[planner] task %s 规划完成", t.ID)
-		}
-		// 自动收尾判定（v0.5.0）：只登记原因，真正 settle 由 plannerLoop 在本轮
-		// inflight 释放后执行（避免 drain 等自己）。
-		if res.err == nil && ectx.Err() == nil && !e.isSettling(t.ID) {
-			if res.met {
-				t.requestSettle("goal_met", "planner 判定目标达成")
-			} else {
-				e.recordAndEvaluateAutoFinish(t, int64(round), triggers)
-			}
-		}
+		e.handlePlannerRoundOutcome(t, int64(round), triggers, res, roundCtx, ectx)
 		// 覆盖矩阵 / 纵深缺口提醒（v0.4.63）：提示词约束不住弱模型时，
 		// 引擎侧确定性补一层。不要求本轮 res.err==nil——超时/模型故障时同样要提醒。
 		if ectx.Err() == nil && !e.isSettling(t.ID) {
@@ -1315,6 +1281,57 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 		}
 		// 每次唤醒(边沿或心跳)后重臂心跳:任意规划触发都重算这段静置计时。
 		resetPlannerTimer(heartbeat, interval)
+	}
+}
+
+// handlePlannerRoundOutcome 处理一轮规划的结果：记录判定 → 登记收尾判据 →
+// 取消在跑 worker。
+//
+// 这里的**顺序**是行为的一部分：cancelExec 取消的正是本轮 ectx（execContextFor
+// 缓存的 per-task ctx），若先取消再检查 ectx.Err()，goal_met 分支的收尾判据对
+// 本轮恒不可达——登记永远不成立，任务只能等心跳/超时才结束。提取成方法是为了
+// 让这个顺序能被单测钉住（engine_settle_test.go）。
+func (e *Engine) handlePlannerRoundOutcome(t *Task, round int64, triggers []agent.TriggerEvent, res plannerRoundOutcome, roundCtx, ectx context.Context) {
+	switch {
+	case res.err != nil && roundCtx.Err() != nil && ectx.Err() == nil:
+		// 规划轮超时（本轮自身的墙钟上限到了，不是任务 deadline）。
+		//
+		// 这一支必须能走到：超时时本轮作废，runRound 正常结束，
+		// planner 恢复响应——下次唤醒再规划一轮。**不能**让它走进下面的
+		// "规划出错"分支后被静默吞掉，否则会退回「永久哑火」的旧症状。
+		log.Printf("[planner] task %s 规划轮超时(%s)，本轮作废，等下次唤醒重试", t.ID, plannerRoundLimit())
+	case res.err != nil && ectx.Err() == nil:
+		log.Printf("[planner] task %s 规划出错: %v", t.ID, res.err)
+	case res.met:
+		// 自主推进续杯：目标全部达成时先问一句「还有没有活可干」。有未测资产/
+		// 高危漏洞且波次没用完 → 自动追加下一层目标，本轮不取消 worker、不
+		// settle，当作「未完成」继续规划。
+		if e.maybeExtendAutopilot(t) {
+			res.met = false
+			break
+		}
+		log.Printf("[planner] task %s 判定目标达成: %s", t.ID, res.reason)
+	default:
+		log.Printf("[planner] task %s 规划完成", t.ID)
+	}
+	// 自动收尾判定（v0.5.0）：只登记原因，真正 settle 由 plannerLoop 在本轮
+	// inflight 释放后执行（避免 drain 等自己）。
+	if res.err == nil && ectx.Err() == nil && !e.isSettling(t.ID) {
+		if res.met {
+			t.requestSettle("goal_met", "planner 判定目标达成")
+		} else {
+			e.recordAndEvaluateAutoFinish(t, round, triggers)
+		}
+	}
+	// 任务已判完成 → 立刻取消在跑的 worker：它们手头的意图跑出来也没意义了。
+	// 下一轮 worker 循环撞终态门就不再领新意图;被取消的这批走下方"任务已完成"分支
+	// 归为 stopped(而非 blocked)。
+	//
+	// 必须排在 requestSettle 之后（见函数注释）。res.err==nil 沿用原 switch 的
+	// 可达性条件：半成功的轮（prove_goal 已置位 GoalMet、随后 LLM/传输出错）
+	// 不能拿来杀 worker。
+	if res.met && res.err == nil {
+		e.cancelExec(t.ID, agent.AbortGoalMet)
 	}
 }
 
