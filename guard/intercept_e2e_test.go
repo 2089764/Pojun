@@ -185,3 +185,39 @@ func TestE2EExecuteExtraToolUnwrapsInnerInput(t *testing.T) {
 		t.Fatal("ExecuteExtraTool 内层 params 未参与规则匹配")
 	}
 }
+
+// 规则级适用工具：写文件工具的正文提到命令名不应被当成执行该命令。
+func TestE2ERuleToolScopeExcludesWrite(t *testing.T) {
+	ic := intercept.New(nil)
+	rule := e2eRule(1, "[测试] 导出类命令", `(?i)\bexample-dump\b`, "deny", 100, false, 60, "deny")
+	rule.ToolScope = []string{"Bash", "shell_open"}
+	ic.SetRulesInMemory([]db.InterceptRule{rule})
+	g := NewWithInterceptor(ic)
+
+	writeIn := json.RawMessage(`{"file_path":"report.md","content":"本次未使用 example-dump"}`)
+	if blocked, _, _ := g.Hooks().PreToolUse(context.Background(), "Write", writeIn); blocked {
+		t.Fatal("写文件正文提到命令名不应被拦截")
+	}
+	bashIn := json.RawMessage(`{"command":"example-dump --all"}`)
+	if blocked, _, _ := g.Hooks().PreToolUse(context.Background(), "Bash", bashIn); !blocked {
+		t.Fatal("shell 执行该命令应被拦截")
+	}
+}
+
+// ExecuteExtraTool 解包先于匹配，因此范围过滤看到的是内层工具名。
+func TestE2ERuleToolScopeSeesUnwrappedTool(t *testing.T) {
+	ic := intercept.New(nil)
+	rule := e2eRule(1, "[测试] 导出类命令", `(?i)\bexample-dump\b`, "deny", 100, false, 60, "deny")
+	rule.ToolScope = []string{"Bash"}
+	ic.SetRulesInMemory([]db.InterceptRule{rule})
+	g := NewWithInterceptor(ic)
+
+	wrapped := json.RawMessage(`{"tool_name":"Bash","params":{"command":"example-dump --all"}}`)
+	if blocked, _, _ := g.Hooks().PreToolUse(context.Background(), "ExecuteExtraTool", wrapped); !blocked {
+		t.Fatal("包装器内层 Bash 应命中")
+	}
+	wrappedWrite := json.RawMessage(`{"tool_name":"Write","params":{"content":"example-dump"}}`)
+	if blocked, _, _ := g.Hooks().PreToolUse(context.Background(), "ExecuteExtraTool", wrappedWrite); blocked {
+		t.Fatal("包装器内层 Write 不在范围内，不应命中")
+	}
+}

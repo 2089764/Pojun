@@ -150,6 +150,8 @@ type RuleForm = {
   priority: number;
   match_target: "tool_name" | "tool_input";
   match_type: "string" | "regex";
+  // 适用工具；空数组 = 不限工具（默认，与旧行为一致）。仅 tool_input 目标使用。
+  tool_scope: string[];
   pattern: string;
   action: InterceptAction;
   message: string;
@@ -164,6 +166,7 @@ const defaultForm = (): RuleForm => ({
   priority: 0,
   match_target: "tool_name",
   match_type: "string",
+  tool_scope: [],
   pattern: "",
   action: "deny",
   message: "",
@@ -526,6 +529,7 @@ export default function InterceptPage() {
     setForm({
       name: rule.name, enabled: rule.enabled, priority: rule.priority,
       match_target: rule.match_target, match_type: rule.match_type,
+      tool_scope: rule.tool_scope ?? [],
       pattern: rule.pattern, action: rule.action, message: rule.message,
       timeout_enabled: rule.timeout_enabled, timeout_seconds: rule.timeout_seconds,
       timeout_action: rule.timeout_action,
@@ -829,6 +833,27 @@ export default function InterceptPage() {
                 </SelectContent>
               </Select>
             </Field>
+
+            {form.match_target === "tool_input" && (
+              <Field label="适用工具（留空 = 不限工具）">
+                <Input
+                  value={form.tool_scope.join(", ")}
+                  onChange={(e) =>
+                    set({
+                      tool_scope: e.target.value
+                        .split(",")
+                        .map((s) => s.trim())
+                        .filter(Boolean),
+                    })
+                  }
+                  placeholder="留空表示对所有工具生效；限定 shell 类可填 Bash, shell_open"
+                />
+                <p className="text-muted-foreground text-xs">
+                  同一段文字出现在写文件工具的正文里是数据，出现在命令字段里才是命令。
+                  给命令类规则填上工具清单，可避免被报告正文误触发。
+                </p>
+              </Field>
+            )}
 
             <Field label="匹配类型">
               <Select
