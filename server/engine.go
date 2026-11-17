@@ -593,7 +593,8 @@ func transitionIntentState(store *db.ExplorationStore, intentID int64, expected,
 
 // retryIntentTerminalAsync 为终态落库失败兜底：DB 短故障恢复后自动补写，
 // 避免意图永久停在 running（HasActiveIntent 恒真、任务无法收尾、UI 也 409）。
-func (e *Engine) retryIntentTerminalAsync(store *db.ExplorationStore, intentID int64, state, stopReason string) {
+// onDone 在补写成功后调用（可为 nil）；收尾判据的消费点靠它被重新唤醒。
+func (e *Engine) retryIntentTerminalAsync(store *db.ExplorationStore, intentID int64, state, stopReason string, onDone func()) {
 	go func() {
 		for attempt := 0; attempt < 12; attempt++ {
 			time.Sleep(5 * time.Second)
@@ -603,6 +604,9 @@ func (e *Engine) retryIntentTerminalAsync(store *db.ExplorationStore, intentID i
 					_ = store.SetIntentStopReason(intentID, stopReason)
 				}
 				log.Printf("[worker] 意图 #%d 终态 %s 后台补写成功", intentID, state)
+				if onDone != nil {
+					onDone()
+				}
 				return
 			}
 			if errors.Is(err, db.ErrIntentStateConflict) {
@@ -1176,6 +1180,9 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 			if active, err := t.Store.HasActiveIntent(); err == nil && !active {
 				// 落 done 前点名缺报告的漏洞（见 warnFindingsWithoutReport）。
 				e.warnFindingsWithoutReport(t)
+				// 这条路径不走 settleTaskWithReason，此前只有 activity、没有进程日志：
+				// 事后无法区分「任务为什么结束」。补一条，与 [settle] 日志对齐。
+				log.Printf("[goalless] task %s 目标全达成且 frontier 已抽干，收尾落 done", t.ID)
 				// frontier 抽干且无在跑意图 → 收尾。用 Guarded 版做 CAS，避免踩到并发的
 				// pause/delete/超时收尾的状态转换。
 				if won, err := e.m.SetTaskStatusGuarded(t.ID, "done"); err != nil {
@@ -1588,12 +1595,20 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	// worker 立刻重领、整段重跑，而挂起的 goal_met 收尾永远等不到 HasActiveIntent=false。
 	if canceledByGoalMet(ectx) {
 		if err := transitionIntentState(t.Store, intent.ID, "running", "stopped"); err != nil {
-			log.Printf("[worker %s] task %s 意图 #%d goal_met 停止落库失败: %v", name, t.ID, intent.ID, err)
+			log.Printf("[worker %s] task %s 意图 #%d goal_met 停止落库失败（安排后台重试）: %v", name, t.ID, intent.ID, err)
+			// 写回失败的意图会一直停在 running → HasActiveIntent 恒真 → 挂起的
+			// goal_met 收尾永远等不到「frontier 抽干」。复用终态补写，并在补写
+			// 成功后唤醒 planner（收尾判据的消费点）。
+			e.retryIntentTerminalAsync(t.Store, intent.ID, "stopped", db.IntentStopTaskDone, t.Notify)
 		} else {
 			_ = t.Store.SetIntentStopReason(intent.ID, db.IntentStopTaskDone)
 		}
 		log.Printf("[worker %s] task %s 意图 #%d 因目标达成取消(stopped)", name, t.ID, intent.ID)
 		e.touch(t.ID)
+		// 边沿唤醒：planner 判定 goal_met 时若还有 worker 在跑，挂起的收尾会被
+		// HasActiveIntent 挡住；最后一个 worker 写回后必须有人叫醒 planner 去消费
+		// 那个判据，否则只能等一个心跳周期（默认 600s）。
+		t.Notify()
 		return true
 	}
 	// 任务已判完成(done via 常规路径)→ 上面 cancelExec 取消了本 run。意图结果已无意义,
@@ -1676,7 +1691,7 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	} else {
 		if stateErr := transitionIntentState(t.Store, intent.ID, "running", state); stateErr != nil {
 			log.Printf("[worker %s] task %s 意图 #%d 终态 %s 落库失败（安排后台重试）: %v", name, t.ID, intent.ID, state, stateErr)
-			e.retryIntentTerminalAsync(t.Store, intent.ID, state, stopReason)
+			e.retryIntentTerminalAsync(t.Store, intent.ID, state, stopReason, t.Notify)
 		} else if stopReason != "" {
 			if err := t.Store.SetIntentStopReason(intent.ID, stopReason); err != nil {
 				log.Printf("[worker %s] task %s 意图 #%d 终态原因落库失败: %v", name, t.ID, intent.ID, err)
