@@ -1032,8 +1032,8 @@ export interface Settings {
   // 全局出口代理(http/https/socks5，可带 user:pass)，所有目标流量走它。开启流量捕获时作为
   // MITM 上游；关闭捕获时直接注入 agent 的 bash/WebFetch。空=直连。
   global_proxy?: string;
-  // 装机代理(http/https/socks5)，仅用于宿主工具安装时的 apt/curl/GitHub 下载。
-  // 与目标流量代理、搜索代理、LLM 代理完全独立。空=直连。
+  // 装机代理(http/https/socks5)，用于宿主工具安装和程序更新等维护请求。
+  // 设置为空时可由 POJUN_INSTALL_PROXY 提供。
   install_proxy?: string;
   python_interpreter?: string; // 自定义脚本工具的 python 解释器路径(空=运行时检测)
   workers?: number; // 并发工作 agent 数(默认3)；对之后启动的任务生效
