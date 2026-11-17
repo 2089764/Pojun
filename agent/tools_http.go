@@ -668,6 +668,7 @@ func (t *ToolSet) sessionLogin() actool.CoreTool {
 			}
 			user, pass, token := strings.TrimSpace(a.Username), a.Password, strings.TrimSpace(a.Token)
 			authKindLabel := "explicit"
+			var breakerKey, breakerHash string // 非空 = 走预置凭据熔断（issue #24）
 			if a.AssetID > 0 {
 				if t.as == nil {
 					return actool.Errorf("asset_id 需要 AssetStore（当前环境未启用）"), nil
@@ -693,6 +694,13 @@ func (t *ToolSet) sessionLogin() actool.CoreTool {
 				e := entries[idx]
 				user, pass, token = e.Username, e.Password, e.Token
 				authKindLabel = fmt.Sprintf("资产#%d 第 %d 条(%s)", a.AssetID, idx, authKind(e))
+				// 预置凭据熔断：已因连续 401/403 熔断时，本地直接拒绝、不发任何
+				// 网络请求——这是它与「模型自己看 401 停手」的本质区别。凭据内容
+				// 变化（操作员改密）后哈希不同，熔断自动复位。
+				breakerKey, breakerHash = loginBreakerKey(t.taskID, a.AssetID, int64(idx), e.Username, e.Password+"\x00"+e.Token)
+				if locked, msg := loginBreakerCheck(breakerKey, breakerHash); locked {
+					return actool.Errorf(msg), nil
+				}
 			}
 			mode := strings.ToLower(strings.TrimSpace(a.AuthMode))
 			if mode == "" {
@@ -797,6 +805,18 @@ func (t *ToolSet) sessionLogin() actool.CoreTool {
 				res["note"] = "响应没有 Set-Cookie：可能是 token 走响应体的系统（从 body 里取 token，再 http_request 用 Authorization 头），也可能登录失败（看 status/body）。"
 			} else {
 				res["note"] = "会话已写入任务级 cookie jar；后续 http_request(session=同名) 或 session_request 自动带登录态。"
+			}
+			// 预置凭据熔断记账（issue #24）：401/403 计失败（连续 2 次熔断），
+			// 2xx 清零；其余状态码中性。传输错误已在上面返回，不计失败。
+			if breakerKey != "" {
+				switch classifyLoginOutcome(out.Status) {
+				case "failure":
+					if note := loginBreakerRecordFailure(breakerKey, breakerHash, out.Status); note != "" {
+						res["note"] = res["note"].(string) + "\n" + note
+					}
+				case "success":
+					loginBreakerRecordSuccess(breakerKey, breakerHash)
+				}
 			}
 			return jsonResult(res)
 		},
