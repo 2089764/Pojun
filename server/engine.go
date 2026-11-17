@@ -593,7 +593,8 @@ func transitionIntentState(store *db.ExplorationStore, intentID int64, expected,
 
 // retryIntentTerminalAsync 为终态落库失败兜底：DB 短故障恢复后自动补写，
 // 避免意图永久停在 running（HasActiveIntent 恒真、任务无法收尾、UI 也 409）。
-func (e *Engine) retryIntentTerminalAsync(store *db.ExplorationStore, intentID int64, state, stopReason string) {
+// onDone 在补写成功后调用（可为 nil）；收尾判据的消费点靠它被重新唤醒。
+func (e *Engine) retryIntentTerminalAsync(store *db.ExplorationStore, intentID int64, state, stopReason string, onDone func()) {
 	go func() {
 		for attempt := 0; attempt < 12; attempt++ {
 			time.Sleep(5 * time.Second)
@@ -603,6 +604,9 @@ func (e *Engine) retryIntentTerminalAsync(store *db.ExplorationStore, intentID i
 					_ = store.SetIntentStopReason(intentID, stopReason)
 				}
 				log.Printf("[worker] 意图 #%d 终态 %s 后台补写成功", intentID, state)
+				if onDone != nil {
+					onDone()
+				}
 				return
 			}
 			if errors.Is(err, db.ErrIntentStateConflict) {
@@ -1176,6 +1180,9 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 			if active, err := t.Store.HasActiveIntent(); err == nil && !active {
 				// 落 done 前点名缺报告的漏洞（见 warnFindingsWithoutReport）。
 				e.warnFindingsWithoutReport(t)
+				// 这条路径不走 settleTaskWithReason，此前只有 activity、没有进程日志：
+				// 事后无法区分「任务为什么结束」。补一条，与 [settle] 日志对齐。
+				log.Printf("[goalless] task %s 目标全达成且 frontier 已抽干，收尾落 done", t.ID)
 				// frontier 抽干且无在跑意图 → 收尾。用 Guarded 版做 CAS，避免踩到并发的
 				// pause/delete/超时收尾的状态转换。
 				if won, err := e.m.SetTaskStatusGuarded(t.ID, "done"); err != nil {
@@ -1253,41 +1260,7 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 			return planner.Plan(ctx, taskIDInt, e.m.assets, t.Store, t.Goal, triggers, emit)
 		})
 		e.EndLLMCall(t.ID)
-		switch {
-		case res.err != nil && roundCtx.Err() != nil && ectx.Err() == nil:
-			// 规划轮超时（本轮自身的墙钟上限到了，不是任务 deadline）。
-			//
-			// 这一支必须能走到：超时时本轮作废，runRound 正常结束，
-			// planner 恢复响应——下次唤醒再规划一轮。**不能**让它走进下面的
-			// "规划出错"分支后被静默吞掉，否则会退回「永久哑火」的旧症状。
-			log.Printf("[planner] task %s 规划轮超时(%s)，本轮作废，等下次唤醒重试", t.ID, plannerRoundLimit())
-		case res.err != nil && ectx.Err() == nil:
-			log.Printf("[planner] task %s 规划出错: %v", t.ID, res.err)
-		case res.met:
-			// 自主推进续杯：目标全部达成时先问一句「还有没有活可干」。有未测资产/
-			// 高危漏洞且波次没用完 → 自动追加下一层目标，本轮不取消 worker、不
-			// settle，当作「未完成」继续规划。
-			if e.maybeExtendAutopilot(t) {
-				res.met = false
-				break
-			}
-			log.Printf("[planner] task %s 判定目标达成: %s", t.ID, res.reason)
-			// 任务已判完成 → 立刻取消在跑的 worker：它们手头的意图跑出来也没意义了。
-			// 下一轮 worker 循环撞终态门就不再领新意图;被取消的这批走下方"任务已完成"分支
-			// 归为 stopped(而非 blocked)。
-			e.cancelExec(t.ID, agent.AbortGoalMet)
-		default:
-			log.Printf("[planner] task %s 规划完成", t.ID)
-		}
-		// 自动收尾判定（v0.5.0）：只登记原因，真正 settle 由 plannerLoop 在本轮
-		// inflight 释放后执行（避免 drain 等自己）。
-		if res.err == nil && ectx.Err() == nil && !e.isSettling(t.ID) {
-			if res.met {
-				t.requestSettle("goal_met", "planner 判定目标达成")
-			} else {
-				e.recordAndEvaluateAutoFinish(t, int64(round), triggers)
-			}
-		}
+		e.handlePlannerRoundOutcome(t, int64(round), triggers, res, roundCtx, ectx)
 		// 覆盖矩阵 / 纵深缺口提醒（v0.4.63）：提示词约束不住弱模型时，
 		// 引擎侧确定性补一层。不要求本轮 res.err==nil——超时/模型故障时同样要提醒。
 		if ectx.Err() == nil && !e.isSettling(t.ID) {
@@ -1315,6 +1288,57 @@ func (e *Engine) plannerLoop(ctx context.Context, t *Task) {
 		}
 		// 每次唤醒(边沿或心跳)后重臂心跳:任意规划触发都重算这段静置计时。
 		resetPlannerTimer(heartbeat, interval)
+	}
+}
+
+// handlePlannerRoundOutcome 处理一轮规划的结果：记录判定 → 登记收尾判据 →
+// 取消在跑 worker。
+//
+// 这里的**顺序**是行为的一部分：cancelExec 取消的正是本轮 ectx（execContextFor
+// 缓存的 per-task ctx），若先取消再检查 ectx.Err()，goal_met 分支的收尾判据对
+// 本轮恒不可达——登记永远不成立，任务只能等心跳/超时才结束。提取成方法是为了
+// 让这个顺序能被单测钉住（engine_settle_test.go）。
+func (e *Engine) handlePlannerRoundOutcome(t *Task, round int64, triggers []agent.TriggerEvent, res plannerRoundOutcome, roundCtx, ectx context.Context) {
+	switch {
+	case res.err != nil && roundCtx.Err() != nil && ectx.Err() == nil:
+		// 规划轮超时（本轮自身的墙钟上限到了，不是任务 deadline）。
+		//
+		// 这一支必须能走到：超时时本轮作废，runRound 正常结束，
+		// planner 恢复响应——下次唤醒再规划一轮。**不能**让它走进下面的
+		// "规划出错"分支后被静默吞掉，否则会退回「永久哑火」的旧症状。
+		log.Printf("[planner] task %s 规划轮超时(%s)，本轮作废，等下次唤醒重试", t.ID, plannerRoundLimit())
+	case res.err != nil && ectx.Err() == nil:
+		log.Printf("[planner] task %s 规划出错: %v", t.ID, res.err)
+	case res.met:
+		// 自主推进续杯：目标全部达成时先问一句「还有没有活可干」。有未测资产/
+		// 高危漏洞且波次没用完 → 自动追加下一层目标，本轮不取消 worker、不
+		// settle，当作「未完成」继续规划。
+		if e.maybeExtendAutopilot(t) {
+			res.met = false
+			break
+		}
+		log.Printf("[planner] task %s 判定目标达成: %s", t.ID, res.reason)
+	default:
+		log.Printf("[planner] task %s 规划完成", t.ID)
+	}
+	// 自动收尾判定（v0.5.0）：只登记原因，真正 settle 由 plannerLoop 在本轮
+	// inflight 释放后执行（避免 drain 等自己）。
+	if res.err == nil && ectx.Err() == nil && !e.isSettling(t.ID) {
+		if res.met {
+			t.requestSettle("goal_met", "planner 判定目标达成")
+		} else {
+			e.recordAndEvaluateAutoFinish(t, round, triggers)
+		}
+	}
+	// 任务已判完成 → 立刻取消在跑的 worker：它们手头的意图跑出来也没意义了。
+	// 下一轮 worker 循环撞终态门就不再领新意图;被取消的这批走下方"任务已完成"分支
+	// 归为 stopped(而非 blocked)。
+	//
+	// 必须排在 requestSettle 之后（见函数注释）。res.err==nil 沿用原 switch 的
+	// 可达性条件：半成功的轮（prove_goal 已置位 GoalMet、随后 LLM/传输出错）
+	// 不能拿来杀 worker。
+	if res.met && res.err == nil {
+		e.cancelExec(t.ID, agent.AbortGoalMet)
 	}
 }
 
@@ -1571,12 +1595,20 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	// worker 立刻重领、整段重跑，而挂起的 goal_met 收尾永远等不到 HasActiveIntent=false。
 	if canceledByGoalMet(ectx) {
 		if err := transitionIntentState(t.Store, intent.ID, "running", "stopped"); err != nil {
-			log.Printf("[worker %s] task %s 意图 #%d goal_met 停止落库失败: %v", name, t.ID, intent.ID, err)
+			log.Printf("[worker %s] task %s 意图 #%d goal_met 停止落库失败（安排后台重试）: %v", name, t.ID, intent.ID, err)
+			// 写回失败的意图会一直停在 running → HasActiveIntent 恒真 → 挂起的
+			// goal_met 收尾永远等不到「frontier 抽干」。复用终态补写，并在补写
+			// 成功后唤醒 planner（收尾判据的消费点）。
+			e.retryIntentTerminalAsync(t.Store, intent.ID, "stopped", db.IntentStopTaskDone, t.Notify)
 		} else {
 			_ = t.Store.SetIntentStopReason(intent.ID, db.IntentStopTaskDone)
 		}
 		log.Printf("[worker %s] task %s 意图 #%d 因目标达成取消(stopped)", name, t.ID, intent.ID)
 		e.touch(t.ID)
+		// 边沿唤醒：planner 判定 goal_met 时若还有 worker 在跑，挂起的收尾会被
+		// HasActiveIntent 挡住；最后一个 worker 写回后必须有人叫醒 planner 去消费
+		// 那个判据，否则只能等一个心跳周期（默认 600s）。
+		t.Notify()
 		return true
 	}
 	// 任务已判完成(done via 常规路径)→ 上面 cancelExec 取消了本 run。意图结果已无意义,
@@ -1659,7 +1691,7 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 	} else {
 		if stateErr := transitionIntentState(t.Store, intent.ID, "running", state); stateErr != nil {
 			log.Printf("[worker %s] task %s 意图 #%d 终态 %s 落库失败（安排后台重试）: %v", name, t.ID, intent.ID, state, stateErr)
-			e.retryIntentTerminalAsync(t.Store, intent.ID, state, stopReason)
+			e.retryIntentTerminalAsync(t.Store, intent.ID, state, stopReason, t.Notify)
 		} else if stopReason != "" {
 			if err := t.Store.SetIntentStopReason(intent.ID, stopReason); err != nil {
 				log.Printf("[worker %s] task %s 意图 #%d 终态原因落库失败: %v", name, t.ID, intent.ID, err)
