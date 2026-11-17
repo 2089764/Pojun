@@ -1084,6 +1084,11 @@ CREATE TABLE IF NOT EXISTS intercept_rules (
     priority        INTEGER NOT NULL DEFAULT 0,
     match_target    TEXT NOT NULL CHECK (match_target IN ('tool_name', 'tool_input')),
     match_type      TEXT NOT NULL CHECK (match_type IN ('string', 'regex')),
+    -- tool_scope 限定本条规则对哪些工具生效（JSON 字符串数组；空数组 = 全部工具）。
+    -- 只对 match_target=tool_input 有实际意义：它匹配的是整段入参 JSON，同一串
+    -- 字符出现在写文件工具的正文里是数据、出现在命令字段里才是命令，纯正则无法
+    -- 区分，工具身份才是无歧义的信号。
+    tool_scope      JSONB NOT NULL DEFAULT '[]',
     pattern         TEXT NOT NULL,
     action          TEXT NOT NULL CHECK (action IN ('allow', 'deny', 'ask', 'judge')),
     message         TEXT NOT NULL DEFAULT '',
@@ -1100,6 +1105,8 @@ CREATE TRIGGER trg_intercept_rules_upd BEFORE UPDATE ON intercept_rules
 ALTER TABLE intercept_rules DROP CONSTRAINT IF EXISTS intercept_rules_action_check;
 ALTER TABLE intercept_rules ADD CONSTRAINT intercept_rules_action_check
     CHECK (action IN ('allow', 'deny', 'ask', 'judge'));
+-- 规则级适用工具范围（补旧库）。空数组 = 不限工具，与加列前的行为完全一致。
+ALTER TABLE intercept_rules ADD COLUMN IF NOT EXISTS tool_scope JSONB NOT NULL DEFAULT '[]';
 
 CREATE TABLE IF NOT EXISTS intercept_pending (
     id              BIGSERIAL PRIMARY KEY,

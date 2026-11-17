@@ -1410,6 +1410,8 @@ export interface InterceptRule {
   priority: number;
   match_target: InterceptMatchTarget;
   match_type: InterceptMatchType;
+  // 本规则适用的工具名列表；空数组/缺省 = 不限工具。仅对 match_target=tool_input 有意义。
+  tool_scope?: string[];
   pattern: string;
   action: InterceptAction;
   message: string;
