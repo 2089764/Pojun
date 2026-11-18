@@ -191,3 +191,65 @@ RETURNING id`, task.ID).Scan(&assetID); err != nil {
 		t.Fatalf("成功清零后再次登录应正常：%s", out)
 	}
 }
+
+// 审计 F1：auth_index 必须与 list_assets 的 auth 数组原始顺序同源；
+// 无效条目（无可用字段）要显式报错并列出有效索引，而不是静默错位取用。
+func TestSessionLoginInvalidAuthIndexErrors(t *testing.T) {
+	dsn, _, err := db.DSN()
+	if err != nil || dsn == "" {
+		t.Skip("no test database configured")
+	}
+	d, err := db.Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	assets := d.Assets()
+
+	task, err := d.CreateTask("invalid auth index", "goal", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.DeleteTask(task.ID)
+	if _, err := assets.AddAgentScope(task.ID, "cidr", "10.78.1.0/24", "test", "agent"); err != nil {
+		t.Fatal(err)
+	}
+	// 顺序敏感：auth[1] 只有 note（无效占位），auth[0] 有效
+	var assetID int64
+	if err := d.QueryRow(`INSERT INTO assets(type,domain,root_domain,ip,task_ids,auth,last_seen)
+VALUES ('service','idx.test','idx.test','10.78.1.10',ARRAY[$1]::bigint[],
+        ARRAY['{"username":"ops","password":"p"}'::jsonb,'{"note":"模板位"}'::jsonb], now())
+RETURNING id`, task.ID).Scan(&assetID); err != nil {
+		t.Fatal(err)
+	}
+	defer d.Exec(`DELETE FROM assets WHERE id=$1`, assetID)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Set-Cookie", "sid=ok")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	ts := &ToolSet{as: assets, taskID: task.ID, runDir: filepath.Join(t.TempDir(), "tasks", strconv.FormatInt(task.ID, 10))}
+	call := func(idx int, url string) string {
+		res, err := ts.sessionLogin().Call(context.Background(), json.RawMessage(fmt.Sprintf(
+			`{"session":"s","url":%q,"asset_id":%d,"auth_index":%d,"auth_mode":"form"}`,
+			url, assetID, idx)), nil)
+		if err != nil {
+			return "GOERR: " + err.Error()
+		}
+		if res.IsError {
+			return "ERR: " + res.Flatten()
+		}
+		return "OK: " + res.Flatten()
+	}
+
+	out := call(1, srv.URL+"/login")
+	if !strings.Contains(out, "ERR") || !strings.Contains(out, "不是有效凭据条目") {
+		t.Fatalf("无效 auth_index 应显式报错：%s", out)
+	}
+	out = call(0, srv.URL+"/login")
+	if !strings.Contains(out, "OK") || !strings.Contains(out, "会话已写入") {
+		t.Fatalf("有效 auth_index=0 应正常登录：%s", out)
+	}
+}

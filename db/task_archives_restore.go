@@ -89,7 +89,7 @@ WHERE relation.source_task_id=$1 LIMIT 1`, taskID).Scan(&dependent)
 	if _, err := tx.Exec(`DELETE FROM credential_access_log WHERE task_id=$1`, taskID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM task_progress WHERE task_id=$1`, taskID); err != nil {
+	if _, err := tx.Exec(`DELETE FROM task_progress WHERE task_id=$1`, strconv.FormatInt(taskID, 10)); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM findings WHERE task_id=$1`, taskID); err != nil {

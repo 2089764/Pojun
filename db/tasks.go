@@ -681,7 +681,7 @@ DELETE FROM assets a USING deletable d WHERE a.id=d.id`, id, expID)
 	if _, err := tx.Exec(`DELETE FROM intercept_pending WHERE task_id=$1`, strconv.FormatInt(id, 10)); err != nil {
 		return result, err
 	}
-	if _, err := tx.Exec(`DELETE FROM task_progress WHERE task_id=$1`, id); err != nil {
+	if _, err := tx.Exec(`DELETE FROM task_progress WHERE task_id=$1`, strconv.FormatInt(id, 10)); err != nil {
 		return result, err
 	}
 	if _, err := tx.Exec(`DELETE FROM credential_access_log WHERE task_id=$1`, id); err != nil {
