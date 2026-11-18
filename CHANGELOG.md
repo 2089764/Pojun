@@ -3,6 +3,14 @@
 本项目的重要变更记录在此文件中，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
 ## [Unreleased]
+### 修复
+
+- **js_audit 目标侧请求头对齐平台默认**：内嵌脚本的 User-Agent 由缺
+  `(KHTML, like Gecko)`、版本仅两段的畸形串，改为与 `http_request` / `poc_scaffold`
+  逐字节一致的 Windows x64 Chrome/131 完整串，并补 `Accept` / `Accept-Language`；
+  声明 `Accept-Encoding: gzip, deflate` 后按 `Content-Encoding` 真解压（gzip、zlib 头
+  deflate、裸 deflate 双回落），多值/未知编码或解压失败输出 `warn` 事件（流被截断时
+  返回已解出的部分），不再静默把乱码当正文扫描。旧 UA 是全网唯一、可被目标侧跨请求关联的指纹。
 
 ### 修复
 
