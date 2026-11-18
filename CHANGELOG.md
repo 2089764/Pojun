@@ -31,6 +31,35 @@
   `TestNucleiEgressNote`。
 - `agent/prompt_tails_test.go`：worker 提示不含 `-random-agent`，含 `-proxy` 与自动注入说明。
 
+## [0.4.87] - 2026-11-19
+
+### 修复（审计修复批 v0.4.87：P1/P2 共 7 项，详见 docs/审计修复计划-v0.4.87.md）
+
+- **B2/P2 auth/init 抢占窗口**：公网部署后、管理员完成 /setup 之前，未认证者可
+  抢先 POST /api/auth/init 设置自己的密码接管实例。现在服务端为未初始化实例
+  生成一次性 setup token（`data/setup-token`，0600，启动日志同步打印），init 必须携带
+  请求头 `X-Setup-Token`；成功后文件删除；已设置密码的实例零影响。/setup 页新增
+  token 输入框。
+- **B3/P2 已认证接口无请求体上限**：绕过统一 decode() 直连 NewDecoder 的 30+ 个
+  handler 被全局 `limitRequestBody(32MB)` 罩住（超限 413），两个自带更大上限的
+  上传端点（workspace 512MB / chat 128MB）显式豁免。
+- **B4/P2 mihomo 订阅可注入 listeners**：恶意订阅可注入 `listen: 0.0.0.0` 的
+  socks listener 开公网无认证代理。writeConfig 现在整键删除 `listeners`。
+- **F1/P2 auth_index 与 list_assets 顺序错位**：parseAuthEntries 此前过滤空条目
+  并把 token 优先重排，导致模型按 list_assets 选中的凭据与实际发出的不一致。
+  现在与 DB 数组【等长同序】，无效条目占位并在 session_login/auth_request 中
+  显式报错并列出有效索引；auth_request 未传索引时选第一条有效凭据。
+- **F2/P2 任务删除/归档级联缺口**：硬删除与归档现在清理 intercept_pending、
+  task_progress、credentials、credential_access_log——审批角标不再永久残留，
+  敏感凭据（密码/私钥密文）不超出授权窗口残留（归档即清除，恢复后重录）。
+- **F3/P2 job_start 同名并发孤儿**：同名并发启动会让先启动进程脱离台账、暂停后
+  仍在打目标。job_start 全程升级为写锁串行化（启动频率低，无感知成本）；同名
+  后启动会先杀掉前一个作业。新增 8 并发无孤儿测试。
+- **F4/P2 poc_scaffold cmdi 判据正则双重转义**：`r"uid=\d+\("` 在 Python 里
+  匹配字面反斜杠，永远命不中 `uid=0(root)`——Linux 命令注入验证骨架假阴性。
+  修正为 `r"uid=\d+\("`。
+- 诊断包、设置页、代理全链路回归不受影响。
+
 ## [0.4.86] - 2026-11-18
 
 ### 新增（PR #32，感谢 @Conly-Zy）

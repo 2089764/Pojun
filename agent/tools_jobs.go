@@ -47,8 +47,8 @@ import (
 // 为每个任务目录维护一张锁表。
 var jobLifecycleMu sync.RWMutex
 
-// jobStartAfterStartHook 仅测试使用：进程已启动、元数据尚未落盘。生产恒为 nil。
-var jobStartAfterStartHook func()
+// jobStartAfterStartHook 仅测试使用：进程已启动（带 PID）、元数据尚未落盘。生产恒为 nil。
+var jobStartAfterStartHook func(pid int)
 
 type jobMeta struct {
 	Name     string `json:"name"`
@@ -169,10 +169,13 @@ func (t *ToolSet) jobStart() actool.CoreTool {
 				return actool.Errorf("任务共享目录不可用（runDir 未注入）"), nil
 			}
 			// 暂停/删除清理（KillJobsForTaskDir）持写锁。这里把「启动 + 元数据落盘」
-			// 整体放进读锁：清理要么在启动前完成（随后 ctx 检查拒绝），要么等登记
-			// 完成后再扫到并杀掉，不会漏掉中途启动的作业。
-			jobLifecycleMu.RLock()
-			defer jobLifecycleMu.RUnlock()
+			// 整体放进写锁：①清理要么在启动前完成（随后 ctx 检查拒绝），要么等登记
+			// 完成后再扫到并杀掉，不会漏掉中途启动的作业；②同名并发启动被串行化——
+			// 读锁下两个同名 job_start 都可能读到「旧作业不存在」而各自启动，
+			// 后写者覆盖 meta，先启动的进程成为清理扫不到的孤儿（审计 F3）。
+			// job 启动频率很低，串行化无感知成本。
+			jobLifecycleMu.Lock()
+			defer jobLifecycleMu.Unlock()
 			if err := ctx.Err(); err != nil {
 				return actool.Errorf("任务已暂停或执行已取消，拒绝启动后台作业"), nil
 			}
@@ -227,7 +230,7 @@ func (t *ToolSet) jobStart() actool.CoreTool {
 				return actool.Errorf("启动作业失败: " + err.Error()), nil
 			}
 			if jobStartAfterStartHook != nil {
-				jobStartAfterStartHook()
+				jobStartAfterStartHook(cmd.Process.Pid)
 			}
 			pid := cmd.Process.Pid
 			// 作业跨 run 存活：用后台 Wait 收尸，不能 Release——Release 不回收子进程，

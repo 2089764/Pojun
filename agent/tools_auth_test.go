@@ -12,18 +12,25 @@ func TestParseAuthEntriesRecognizesCommonKeys(t *testing.T) {
 	raw := []map[string]any{
 		{"type": "wordpress", "username": "admin", "password": "p@ss"},
 		{"type": "bearer", "token": "abc.def.ghi"},
-		{"user": "bob", "pass": "secret"},      // 键名变体
+		{"user": "bob", "pass": "secret"},    // 键名变体
 		{"token": "tk", "description": "后台"}, // 带说明
-		{"nothing": "here"},                   // 无可用字段 → 不算一条
+		{"nothing": "here"},                  // 无可用字段 → 占位（保序）
 	}
 	entries := parseAuthEntries(raw)
-	// 4 条有效凭据（wordpress / bearer / bob / tk），第 5 条无可用字段被跳过。
-	if len(entries) != 4 {
-		t.Fatalf("解析出 %d 条凭据，应为 4 条（无可用字段的不算）", len(entries))
+	// 审计 F1：输出必须与原数组【等长同序】——list_assets 给模型看的是原始
+	// 数组顺序，session_login 的 auth_index 必须与之同源，否则模型选中的
+	// 凭据与实际发出的不一致。
+	if len(entries) != 5 {
+		t.Fatalf("解析出 %d 条，应为 5 条（与原数组等长，无效条目占位）", len(entries))
 	}
-	// token 优先排前面（默认 auth_index=0 拿到最省事的那条）。
-	if entries[0].Token == "" {
-		t.Errorf("token 类凭据应排在最前，实际首条是 %+v", entries[0])
+	if entries[0].Username != "admin" || entries[0].Password != "p@ss" {
+		t.Errorf("entries[0] 应保持原序：%+v", entries[0])
+	}
+	if entries[1].Token != "abc.def.ghi" {
+		t.Errorf("entries[1] 应保持原序：%+v", entries[1])
+	}
+	if entries[4].valid() {
+		t.Errorf("无效条目应以零值占位：%+v", entries[4])
 	}
 	// 键名变体要认出来。
 	found := false
@@ -35,13 +42,22 @@ func TestParseAuthEntriesRecognizesCommonKeys(t *testing.T) {
 	if !found {
 		t.Error("键名变体(user/pass)未被识别")
 	}
+	// 有效索引提示应排除无效条目
+	if got := validAuthIndices(entries); got != "0,1,2,3" {
+		t.Errorf("validAuthIndices=%q，期望 0,1,2,3", got)
+	}
 }
 
-// 没有凭据时返回空——工具要如实报「未登记凭据」，不能编。
+// 没有凭据时返回等长的占位列表（调用方按 valid() 报错），工具报「未登记凭据」。
 func TestParseAuthEntriesEmptyWhenNoUsableFields(t *testing.T) {
 	entries := parseAuthEntries([]map[string]any{{"foo": "bar"}, {"note": "x"}})
-	if len(entries) != 0 {
-		t.Errorf("无凭据字段时应返回空，实际 %d 条", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("无凭据字段也应与原数组等长，实际 %d 条", len(entries))
+	}
+	for _, e := range entries {
+		if e.valid() {
+			t.Errorf("无效条目应为零值占位：%+v", e)
+		}
 	}
 }
 
