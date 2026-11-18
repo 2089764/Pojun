@@ -11,6 +11,7 @@ package vulnintel
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -115,6 +116,58 @@ type ScanArgs struct {
 	CVEID        string        // optional: restrict to templates mentioning this CVE
 	Severity     string        // optional: comma list critical,high,medium,low
 	TimeoutTotal time.Duration // whole-run ceiling (default 10m, cap 30m)
+	// Proxy 是出口代理 URL（可空）。空=直连，命令里不出现 -proxy——
+	// nuclei 的 -proxy 是 string[]，空条目会让代理解析失败。
+	Proxy string
+}
+
+// EffectiveTimeout 归一化整轮超时：<=0 用 10m，>30m 钳到 30m。
+// BuildNucleiCmd 与 agent 侧的 GNU timeout 包裹共用这一套规则，避免两处钳制漂移。
+func EffectiveTimeout(d time.Duration) time.Duration {
+	if d <= 0 {
+		return 10 * time.Minute
+	}
+	if d > 30*time.Minute {
+		return 30 * time.Minute
+	}
+	return d
+}
+
+// normalizeNucleiProxy 把 ToolSet 的出口代理归一化成 nuclei -proxy 接受的形式。
+// 规则与 agent 侧 buildHTTPClient 一致：只有缺 scheme 时才补 http://，绝不无条件拼
+// （生产值经 traffic.ProxyAddr 恒带 http://，无条件拼会得到 http://http://…）。
+// 空/纯空白=直连，调用方不发射 -proxy。逗号一律拒绝：-proxy 是 string[]，逗号会被当成
+// 多代理分隔符，带逗号口令的 URL 会被静默拆坏（-silent 下等同“无命中”）。这里不做
+// 百分号编码——编码后的 userinfo 代理端未必认，宁可显式报错。
+// 端口必填：nuclei v3.11.1 启动时按 Hostname():Port() 做 TCP 探活，缺端口直接在
+// Logger.Fatal，工具层提前报错才能给出可读原因。
+func normalizeNucleiProxy(raw string) (string, error) {
+	p := strings.TrimSpace(raw)
+	if p == "" {
+		return "", nil
+	}
+	if strings.Contains(p, ",") {
+		return "", fmt.Errorf("代理地址含逗号(%q):nuclei 会把 -proxy 当多代理列表拆开,请改用不含逗号的地址", p)
+	}
+	if !strings.Contains(p, "://") {
+		p = "http://" + p
+	}
+	u, err := url.Parse(p)
+	if err != nil {
+		return "", fmt.Errorf("代理地址无法解析(%q): %v", p, err)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https", "socks5":
+	default:
+		return "", fmt.Errorf("不支持的代理协议(%q):只接受 http/https/socks5", u.Scheme)
+	}
+	if u.Host == "" {
+		return "", fmt.Errorf("代理地址缺少主机(%q)", p)
+	}
+	if u.Port() == "" {
+		return "", fmt.Errorf("代理地址缺少端口(%q):nuclei 启动时按 host:port 探活,缺端口会直接退出", p)
+	}
+	return p, nil
 }
 
 // BuildNucleiCmd assembles the nuclei invocation. Templates restricted to the
@@ -129,13 +182,7 @@ func BuildNucleiCmd(ctx context.Context, templatesDir string, a ScanArgs) (*exec
 	if _, err := os.Stat(filepath.Join(templatesDir, ".git")); err != nil {
 		return nil, nil, fmt.Errorf("模板树不可用(%s):先等同步器完成初始化", templatesDir)
 	}
-	timeout := a.TimeoutTotal
-	if timeout <= 0 {
-		timeout = 10 * time.Minute
-	}
-	if timeout > 30*time.Minute {
-		timeout = 30 * time.Minute
-	}
+	timeout := EffectiveTimeout(a.TimeoutTotal)
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 
 	args := []string{
@@ -145,6 +192,15 @@ func BuildNucleiCmd(ctx context.Context, templatesDir string, a ScanArgs) (*exec
 		"-silent",
 		"-no-color",
 		"-disable-update-check",
+	}
+	// 出口代理：Traffic 捕获 / 全局代理 / 严格出口哨兵都经 ToolSet.egressProxy 流进来。
+	// 必须在这里发射：scan_with_nuclei 只组命令，nuclei 由 Bash 执行，
+	// “nuclei 对 env 支持不稳”这条约束光靠提示词无法强制。
+	if prox, perr := normalizeNucleiProxy(a.Proxy); perr != nil {
+		cancel()
+		return nil, nil, perr
+	} else if prox != "" {
+		args = append(args, "-proxy", prox)
 	}
 	if cve := strings.TrimSpace(a.CVEID); cve != "" {
 		templates := FindNucleiTemplates(templatesDir, cve)
