@@ -1038,6 +1038,23 @@ export const api = {
   startSSHProvider: (id: number) => post<{ ok: boolean; socks_addr: string }>(`/egress/ssh/${id}/start`, {}),
   stopSSHProvider: (id: number) => post<{ stopped: boolean }>(`/egress/ssh/${id}/stop`, {}),
   useSSHProvider: (id: number) => post<{ ok: boolean; socks_addr: string }>(`/egress/ssh/${id}/use`, {}),
+  // 诊断包：下载 zip（设置 + 运行指标 + 任务/目标/意图 + 轨迹 + 日志聚合 +
+  // 流量/代理/LLM 统计 + 完整性自检）。detail=true 带更大窗口与 worker 轨迹摘要。
+  exportDiagnostics: async (opts?: { detail?: boolean }) => {
+    let blob: Blob;
+    if (MOCK) {
+      blob = new Blob(["（demo）诊断包内容"], { type: "application/zip" });
+    } else {
+      const token = getToken();
+      const qs = opts?.detail ? "?detail=1" : "";
+      const r = await fetch(`/api/diagnostics/export${qs}`, {
+        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      });
+      if (!r.ok) throw new Error(`诊断包导出失败: ${r.status}`);
+      blob = await r.blob();
+    }
+    triggerBlobDownload(blob, `pojun-diagnostics-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "")}.zip`);
+  },
   vulnintelStatus: () => get<VulnIntelStatus>(`/vulnintel/status`),
   vulnintelSaveConfig: (payload: VulnIntelConfigPatch) => put<{ ok: boolean }>(`/vulnintel/config`, payload),
   vulnintelSyncNow: () => post<{ accepted: boolean }>(`/vulnintel/sync`, {}),

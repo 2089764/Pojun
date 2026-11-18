@@ -877,6 +877,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/llm/records/tasks", s.pgLLMTasks)
 	mux.HandleFunc("GET /api/llm/records/by-model", s.pgTokenByModel) // 按模型聚合本任务 token 用量
 	mux.HandleFunc("GET /api/llm/records/{id}", s.pgGetLLMRecord)
+	// 诊断包：GET 下载 zip（设置/任务/意图/轨迹/日志/流量/代理运行态；不含流量正文与凭据）
+	mux.HandleFunc("GET /api/diagnostics/export", s.handleDiagnosticsExport)
 	mux.HandleFunc("GET /api/settings", s.getSettings)
 	mux.HandleFunc("PUT /api/settings", s.putSettings)
 	// 漏洞 IM 推送。渠道是「多实例 + 各自过滤规则」的资源，因此独立成一组

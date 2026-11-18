@@ -5,6 +5,7 @@ import * as React from "react";
 import { CpuIcon, FlaskConicalIcon, GaugeIcon, KeyboardIcon, RadioTowerIcon, SearchIcon, ShieldAlertIcon, TimerResetIcon } from "lucide-react";
 import { toast } from "sonner";
 
+import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -34,6 +35,9 @@ export default function SystemSettingsPage() {
   const [savingGlobalProxy, setSavingGlobalProxy] = React.useState(false);
   const [testing, setTesting] = React.useState(false);
   const [loaded, setLoaded] = React.useState(false);
+  // 诊断包导出
+  const [diagDetail, setDiagDetail] = React.useState(false);
+  const [exportingDiag, setExportingDiag] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [savingKey, setSavingKey] = React.useState(false);
   const [pyInterp, setPyInterp] = React.useState("");
@@ -393,21 +397,40 @@ export default function SystemSettingsPage() {
   // brave-free selected but no key stored and none being entered → tool stays off.
   const braveNeedsKey = webSearch && backend === "brave-free" && !braveKeySet;
 
+  async function exportDiagnostics() {
+    if (exportingDiag) return;
+    setExportingDiag(true);
+    try {
+      await api.exportDiagnostics({ detail: diagDetail });
+      toast.success("诊断包已开始下载");
+    } catch (e) {
+      toast.error(`导出失败：${(e as Error).message}`);
+    } finally {
+      setExportingDiag(false);
+    }
+  }
+
   return (
     <div className="flex flex-1 flex-col gap-4 md:gap-6">
-      <div>
-        <h1 className="font-semibold text-xl tracking-tight">系统配置</h1>
-        <p className="text-muted-foreground text-sm">全局运行时开关</p>
-      </div>
+      <PageHeader
+        title="系统配置"
+        description="全局运行时开关：更新、执行并发、自主推进边界、网络与流量、模型上下文与维护。任务级覆盖在任务详情中设置。"
+      />
 
-      {/* 多列而非 grid：网络搜索卡片比其余高数倍，且高度随所选后端变化（brave/tavily
-          的 key 输入是条件渲染）。grid 会按最高的一张撑满整行、在旁边留下大片空白，
-          多列则自动按内容高度平衡填充。卡片间距靠 mb 而非 gap——多列布局下
-          column-gap 只管列间距，行间距要由子元素自己给。 */}
-      <div className="columns-1 gap-4 md:gap-6 lg:columns-2">
-        <UpdateCard />
+      {/* 两列网格 + 分区标题（参考内部版）：卡片按语义分组、同行等高；
+          分区标题本身是 col-span-2 的网格项，因此总在新区块行首。 */}
+      <div className="grid grid-cols-1 items-stretch gap-4 md:gap-6 lg:grid-cols-2 [&_[data-slot=card]]:h-full [&_[data-slot=card-content]]:flex-1">
+        <div className="order-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground lg:col-span-2">版本更新</div>
+        <div className="order-2 lg:col-span-2 [&_[data-slot=card]]:h-full">
+          <UpdateCard />
+        </div>
+        <div className="order-12 text-xs font-semibold uppercase tracking-wider text-muted-foreground lg:col-span-2">网络与流量</div>
+        <div className="order-20 text-xs font-semibold uppercase tracking-wider text-muted-foreground lg:col-span-2">执行与并发</div>
+        <div className="order-30 text-xs font-semibold uppercase tracking-wider text-muted-foreground lg:col-span-2">模型与上下文</div>
+        <div className="order-40 text-xs font-semibold uppercase tracking-wider text-muted-foreground lg:col-span-2">功能与偏好</div>
+        <div className="order-50 text-xs font-semibold uppercase tracking-wider text-muted-foreground lg:col-span-2">系统维护</div>
 
-        <Card className="mb-4 break-inside-avoid md:mb-6">
+        <Card className="order-13">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <RadioTowerIcon className="size-4" />
@@ -434,7 +457,7 @@ export default function SystemSettingsPage() {
           </CardContent>
         </Card>
 
-        <Card className="mb-4 break-inside-avoid md:mb-6">
+        <Card className="order-14">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <RadioTowerIcon className="size-4" />
@@ -462,7 +485,7 @@ export default function SystemSettingsPage() {
           </CardContent>
         </Card>
 
-        <Card className="mb-4 break-inside-avoid md:mb-6">
+        <Card className="order-15">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <RadioTowerIcon className="size-4" />
@@ -503,7 +526,7 @@ export default function SystemSettingsPage() {
           </CardContent>
         </Card>
 
-        <Card className="mb-4 break-inside-avoid md:mb-6">
+        <Card className="order-21">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <ShieldAlertIcon className="size-4" />
@@ -543,7 +566,7 @@ export default function SystemSettingsPage() {
           </CardContent>
         </Card>
 
-        <Card className="mb-4 break-inside-avoid md:mb-6">
+        <Card className="order-31">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <FlaskConicalIcon className="size-4" />
@@ -571,7 +594,7 @@ export default function SystemSettingsPage() {
           </CardContent>
         </Card>
 
-        <Card className="mb-4 break-inside-avoid md:mb-6">
+        <Card className="order-41">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <SearchIcon className="size-4" />
@@ -757,7 +780,7 @@ export default function SystemSettingsPage() {
           </CardContent>
         </Card>
 
-        <Card className="mb-4 break-inside-avoid md:mb-6">
+        <Card className="order-42">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <RadioTowerIcon className="size-4" />
@@ -787,7 +810,7 @@ export default function SystemSettingsPage() {
           </CardContent>
         </Card>
 
-        <Card className="mb-4 break-inside-avoid md:mb-6">
+        <Card className="order-22">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <CpuIcon className="size-4" />
@@ -816,7 +839,7 @@ export default function SystemSettingsPage() {
           </CardContent>
         </Card>
 
-        <Card className="mb-4 break-inside-avoid md:mb-6">
+        <Card className="order-23">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <TimerResetIcon className="size-4" />
@@ -899,7 +922,7 @@ export default function SystemSettingsPage() {
           </CardContent>
         </Card>
 
-        <Card className="mb-4 break-inside-avoid md:mb-6">
+        <Card className="order-24">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <GaugeIcon className="size-4" />
@@ -947,7 +970,7 @@ export default function SystemSettingsPage() {
           </CardContent>
         </Card>
 
-        <Card className="mb-4 break-inside-avoid md:mb-6">
+        <Card className="order-32">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <CpuIcon className="size-4" />
@@ -1041,7 +1064,7 @@ export default function SystemSettingsPage() {
           </CardContent>
         </Card>
 
-        <Card className="mb-4 break-inside-avoid md:mb-6">
+        <Card className="order-43">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <KeyboardIcon className="size-4" />
@@ -1069,6 +1092,34 @@ export default function SystemSettingsPage() {
                 ))}
               </SelectContent>
             </Select>
+          </CardContent>
+        </Card>
+
+        <Card className="order-51">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <SearchIcon className="size-4" />
+              诊断与排障
+            </CardTitle>
+            <CardDescription>
+              导出诊断包：设置、运行指标、任务/目标/意图、执行轨迹、漏洞/事实、事件时间线、
+              分层日志（panic 聚合）、流量/代理/LLM 统计与数据完整性自检，打包为一个 zip。
+              出问题时把这份文件发给开发即可定位，无需登录服务器（不含 LLM/代理凭据、流量与证据正文）。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-1 flex-col justify-center gap-4">
+            <div className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
+              <div className="min-w-0">
+                <div className="text-sm">包含详细执行轨迹</div>
+                <div className="text-muted-foreground text-xs">
+                  带 worker 逐步工具轨迹（参数只保留形状摘要，不含命令/流量正文）与更大日志窗口，体积可达 50MB。
+                </div>
+              </div>
+              <Switch checked={diagDetail} onCheckedChange={setDiagDetail} disabled={exportingDiag} />
+            </div>
+            <Button size="sm" variant="outline" onClick={exportDiagnostics} disabled={!loaded || exportingDiag}>
+              {exportingDiag ? "导出中…" : "导出诊断包（zip）"}
+            </Button>
           </CardContent>
         </Card>
       </div>
