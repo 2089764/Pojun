@@ -227,9 +227,9 @@ func proxyEnv(proxyAddr, caCert string) []string {
 		"http_proxy=" + proxyAddr, "https_proxy=" + proxyAddr,
 		"ALL_PROXY=" + proxyAddr, "all_proxy=" + proxyAddr, // socks5 egress: curl reads only this
 		"NODE_USE_ENV_PROXY=1", // Node 24+: honor HTTP(S)_PROXY in built-in fetch/http
-		// POJUN_PROXY 给脚本/工具显式传参用（sqlmap --proxy、ffuf -proxy、
+		// EGRESS_PROXY 给脚本/工具显式传参用（sqlmap --proxy、ffuf -proxy、
 		// nuclei -proxy 等对 env 支持不稳的工具直接从环境变量取）。
-		"POJUN_PROXY=" + proxyAddr,
+		"EGRESS_PROXY=" + proxyAddr,
 	}
 	if caCert != "" {
 		env = append(env,
@@ -238,7 +238,7 @@ func proxyEnv(proxyAddr, caCert string) []string {
 			"REQUESTS_CA_BUNDLE="+caCert,
 			"GIT_SSL_CAINFO="+caCert,
 			"NODE_EXTRA_CA_CERTS="+caCert,
-			"POJUN_PROXY_CA="+caCert,
+			"EGRESS_PROXY_CA="+caCert,
 		)
 	}
 	return env
@@ -252,7 +252,7 @@ var proxyEnvKeys = []string{
 	"ALL_PROXY", "all_proxy", "NODE_USE_ENV_PROXY",
 	"SSL_CERT_FILE", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE",
 	"GIT_SSL_CAINFO", "NODE_EXTRA_CA_CERTS",
-	"POJUN_PROXY", "POJUN_PROXY_CA",
+	"EGRESS_PROXY", "EGRESS_PROXY_CA",
 }
 
 // mergeProxyEnv 用平台出口代理覆盖 base（通常是 os.Environ()）。proxyAddr 为空
@@ -377,15 +377,15 @@ func ensureRunDir(base string, taskID, intentID int64) string {
 func cmdOutDir(dir string) string { return filepath.Join(dir, "cmd-output") }
 
 // workerEgressBlock 是代码owned的出口护栏提示：Bash/原生工具已注入代理环境，
-// 但 sqlmap/ffuf/nuclei 等对 env 支持不稳，必须显式从 POJUN_PROXY 取地址。
+// 但 sqlmap/ffuf/nuclei 等对 env 支持不稳，必须显式从 EGRESS_PROXY 取地址。
 func workerEgressBlock(proxyAddr string) string {
 	if strings.TrimSpace(proxyAddr) == "" {
 		return ""
 	}
 	return "\n\n**出口代理（必须遵守）**：当前任务流量统一走 " + proxyAddr + "（curl/python/git 等自动继承 HTTP(S)_PROXY；后台 job_start 同样继承）。" +
-		"以下工具对 env 支持不稳，必须显式传代理：sqlmap 用 `--proxy=\"$POJUN_PROXY\"`，" +
-		"ffuf 用 `-proxy \"$POJUN_PROXY\"`，nuclei 用 `-proxy \"$POJUN_PROXY\"`，" +
-		"httpx 用 `-http-proxy \"$POJUN_PROXY\"`，dalfox 用 `--proxy \"$POJUN_PROXY\"`。" +
+		"以下工具对 env 支持不稳，必须显式传代理：sqlmap 用 `--proxy=\"$EGRESS_PROXY\"`，" +
+		"ffuf 用 `-proxy \"$EGRESS_PROXY\"`，nuclei 用 `-proxy \"$EGRESS_PROXY\"`，" +
+		"httpx 用 `-http-proxy \"$EGRESS_PROXY\"`，dalfox 用 `--proxy \"$EGRESS_PROXY\"`。" +
 		"禁止用 `--noproxy '*'`、`trust_env=False`、`proxies={}` 等方式绕过出口（会丢失流量证据并暴露真实 IP）；" +
 		"若出口不通，先用 proxy_status 查看池状态/上报坏出口。后台任务用 job_start（Monitor 不继承代理环境）。"
 }

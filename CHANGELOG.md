@@ -3,6 +3,14 @@
 本项目的重要变更记录在此文件中，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
 ## [Unreleased]
+
+## [0.4.88] - 2026-11-19
+### 变更
+
+- **出口代理环境变量改名 `POJUN_PROXY` → `EGRESS_PROXY`**（配合 PR #37 去品牌守卫）：
+  agent 注入 Bash 的代理变量与提示词、skills 手工命令模板全部同步。落盘脚本若引用旧名，
+  重新生成即可；`HTTP(S)_PROXY`/`ALL_PROXY` 等标准变量不受影响。
+
 ### 修复
 
 - **js_audit 目标侧请求头对齐平台默认**：内嵌脚本的 User-Agent 由缺
@@ -49,7 +57,7 @@
   照抄示例必然失败；同时说明 `scan_with_nuclei` 已自动带 `-proxy`、手工命令才需自己加。
   涉及 `agent/ops_tails.go`、`skills/component-vuln-intel/SKILL.md`，以及
   `skills/src-hunting/references/`（`recon-methodology`、`subdomain-takeover-test`
-  的手工命令用 `${POJUN_PROXY:+-proxy "$POJUN_PROXY"}`，未配置代理时不发射空 `-proxy`）。
+  的手工命令用 `${EGRESS_PROXY:+-proxy "$EGRESS_PROXY"}`，未配置代理时不发射空 `-proxy`）。
 - 工具 note 在配置出口代理时前置排查提示（`-silent` 下空输出≠无命中），与正文之间留空格分隔。
 - GNU `timeout` 包装的秒数改由 `TimeoutTotal` 推导（与 `BuildNucleiCmd` 共用
   `vulnintel.EffectiveTimeout` 的 0→10m / >30m→30m 钳制），不再写死 600 秒。

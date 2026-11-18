@@ -18,8 +18,8 @@ func TestProxyEnvIncludesExplicitProxy(t *testing.T) {
 	for _, want := range []string{
 		"HTTP_PROXY=http://127.0.0.1:18080",
 		"ALL_PROXY=http://127.0.0.1:18080",
-		"POJUN_PROXY=http://127.0.0.1:18080",
-		"POJUN_PROXY_CA=/tmp/ca.pem",
+		"EGRESS_PROXY=http://127.0.0.1:18080",
+		"EGRESS_PROXY_CA=/tmp/ca.pem",
 		"REQUESTS_CA_BUNDLE=/tmp/ca.pem",
 	} {
 		if !strings.Contains(joined, want) {
@@ -35,7 +35,7 @@ func TestMergeProxyEnvOverridesParent(t *testing.T) {
 	if strings.Contains(joined, "http://old:1") {
 		t.Fatalf("父进程旧代理变量未被剔除：\n%s", joined)
 	}
-	if !strings.Contains(joined, "HTTP_PROXY=http://127.0.0.1:18080") || !strings.Contains(joined, "POJUN_PROXY=http://127.0.0.1:18080") {
+	if !strings.Contains(joined, "HTTP_PROXY=http://127.0.0.1:18080") || !strings.Contains(joined, "EGRESS_PROXY=http://127.0.0.1:18080") {
 		t.Fatalf("平台出口未注入：\n%s", joined)
 	}
 	if !strings.Contains(joined, "PATH=/bin") || !strings.Contains(joined, "NO_PROXY=*") {
@@ -86,7 +86,7 @@ func TestJobStartInheritsEgressProxy(t *testing.T) {
 	ts := &ToolSet{runDir: taskDir, ownerNode: 1}
 	ts.SetEgressProxy("http://127.0.0.1:18080", "")
 	if _, err := ts.jobStart().Call(context.Background(), json.RawMessage(
-		`{"name":"proxyenv","command":"echo \"$HTTP_PROXY|$POJUN_PROXY\""}`), nil); err != nil {
+		`{"name":"proxyenv","command":"echo \"$HTTP_PROXY|$EGRESS_PROXY\""}`), nil); err != nil {
 		t.Fatal(err)
 	}
 	logPath := filepath.Join(taskDir, "shared", "jobs", "proxyenv.log")

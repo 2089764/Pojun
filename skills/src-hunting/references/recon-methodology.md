@@ -281,16 +281,16 @@ Priority 5: Import/export, template rendering → XXE, SSTI
 
 全量模板扫一遍不当进度。只在已知 CVE / 暴露面需要时收窄模板。
 
-平台配了出口代理时（Bash 里 `$POJUN_PROXY` 非空），手工 `nuclei` 命令必须带 `-proxy "$POJUN_PROXY"`，否则直连会暴露真实 IP；`scan_with_nuclei` 已自动带，不要重复加。示例用 `${POJUN_PROXY:+-proxy "$POJUN_PROXY"}`：未配置代理时整段自动省略，避免空 `-proxy` 让 nuclei 报错。
+平台配了出口代理时（Bash 里 `$EGRESS_PROXY` 非空），手工 `nuclei` 命令必须带 `-proxy "$EGRESS_PROXY"`，否则直连会暴露真实 IP；`scan_with_nuclei` 已自动带，不要重复加。示例用 `${EGRESS_PROXY:+-proxy "$EGRESS_PROXY"}`：未配置代理时整段自动省略，避免空 `-proxy` 让 nuclei 报错。
 
 ```bash
 # 收窄：已知 CVE / 暴露面，不要当开场全量
-nuclei -u https://target.com -t cves/ -severity critical,high ${POJUN_PROXY:+-proxy "$POJUN_PROXY"}
-nuclei -u https://target.com -t exposures/ ${POJUN_PROXY:+-proxy "$POJUN_PROXY"}
-nuclei -u https://target.com -t misconfiguration/ ${POJUN_PROXY:+-proxy "$POJUN_PROXY"}
+nuclei -u https://target.com -t cves/ -severity critical,high ${EGRESS_PROXY:+-proxy "$EGRESS_PROXY"}
+nuclei -u https://target.com -t exposures/ ${EGRESS_PROXY:+-proxy "$EGRESS_PROXY"}
+nuclei -u https://target.com -t misconfiguration/ ${EGRESS_PROXY:+-proxy "$EGRESS_PROXY"}
 
 # On subdomain list:
-cat subdomains.txt | nuclei -t exposures/ -t misconfiguration/ -o exposed.txt ${POJUN_PROXY:+-proxy "$POJUN_PROXY"}
+cat subdomains.txt | nuclei -t exposures/ -t misconfiguration/ -o exposed.txt ${EGRESS_PROXY:+-proxy "$EGRESS_PROXY"}
 ```
 
 ---

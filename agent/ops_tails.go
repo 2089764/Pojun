@@ -16,10 +16,10 @@ const scannerFirstGuidance = `
   ` + "`ffuf -u <base>/FUZZ -w /opt/SecLists/Discovery/Web-Content/raft-medium-directories.txt -t 10 -rate 30 -timeout 10 -mc 200,204,301,302,401,403 -o ffuf.json -of json`" + `
   （或 ` + "`gobuster dir -u <base> -w 同字典 -t 10 --delay 200ms`" + `）。重点是 401/403 与非常规 200——后台/接口常在这里。
 - **组件/已知 CVE**：先 ` + "`search_vulns`" + ` 拿到组件对应 CVE，再
-  ` + "`nuclei -u <url> -severity critical,high -rate-limit 30 -jsonl -o out.jsonl ${POJUN_PROXY:+-proxy \"$POJUN_PROXY\"}`" + `
+  ` + "`nuclei -u <url> -severity critical,high -rate-limit 30 -jsonl -o out.jsonl ${EGRESS_PROXY:+-proxy \"$EGRESS_PROXY\"}`" + `
   （或直接用 scan_with_nuclei 组命令，它会按平台出口自动带 -proxy，不要重复加）。
-  平台配了出口代理（Bash 里 $POJUN_PROXY 非空）时，手工敲的 nuclei 必须补 ` + "`-proxy \"$POJUN_PROXY\"`" + `；
-  示例里的 ` + "`${POJUN_PROXY:+...}`" + ` 在未配置时整段省略，不会留下空 -proxy。
+  平台配了出口代理（Bash 里 $EGRESS_PROXY 非空）时，手工敲的 nuclei 必须补 ` + "`-proxy \"$EGRESS_PROXY\"`" + `；
+  示例里的 ` + "`${EGRESS_PROXY:+...}`" + ` 在未配置时整段省略，不会留下空 -proxy。
   空输出 = 无命中，不是失败；有命中必须复验后 report_finding。
 - **带参数的端点**：只有 GET/POST 参数、JSON 字段、cookie 这类输入点才谈注入。先用
   ` + "`sqlmap -u \"<url>\" --batch --level=2 --risk=1 --timeout 10 --flush-session [--data=... --cookie=...]`" + `
