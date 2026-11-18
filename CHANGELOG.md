@@ -4,6 +4,42 @@
 
 ## [Unreleased]
 
+## [0.4.83] - 2026-11-18
+
+### 新增：代理全链路（自内部红队版移植）
+
+- **Clash / mihomo 内核管理**：新增「系统 → Clash 节点管理」页。支持订阅拉取
+  （Clash YAML / URI / base64，带 SSRF 防护）、节点分组展示、一键安装内核
+  （GitHub 官方源 + 镜像加速 + 自定义 URL / 本地文件 / PATH 四路，SHA256 校验、
+  断点续传）、启动/停止、五种出口模式（固定组/固定节点/负载均衡/url-test/
+  fallback）、节点延迟测速。内核只监听回环 mixed-port，external-controller
+  每次启动随机 secret。
+- **代理池升级**：池在「流量捕获关闭」时也生效（整任务钉住同一出口），捕获开启
+  时仍作为 MITM 上游按请求轮换；新增总开关、导入前验活、批量选择、熔断状态跨
+  重启持久化、健康检查自动拉起本机 mihomo、本机 Clash 端口自动探测接管。
+- **严格出口（UI 开关，默认关）**：池已配置但全部熔断时，目标请求直接失败
+  （哨兵地址 127.0.0.1:1），不回退直连、不暴露真实 IP；另有「直连但仍录制」
+  兜底开关（默认关，显式开启才牺牲 IP 隐藏换证据连续性）。
+- **SSH 跳板出口**：新增「系统 → SSH 跳板」页。登记跳板机（密码/私钥经
+  XChaCha20-Poly1305 存入凭据保险库，API 只回 credential_id），本地起最小
+  SOCKS5，一键设为代理池出口；与 Clash 节点可并存。
+- **出口提示与显式传参**：worker 提示词新增出口护栏——sqlmap/ffuf/nuclei/
+  httpx/dalfox 等对 env 支持不稳的工具必须从 `POJUN_PROXY` 显式取代理；
+  禁止 `--noproxy '*'`、`trust_env=False` 等绕过；后台任务用 `job_start`
+  （Monitor 不继承代理环境）。
+
+### 修复：目标流量漏出代理
+
+- **原生执行器 `http_request` / `session_login` 直连**：`SetEgressProxy` 此前
+  是死代码（定义后无人调用），原生工具回落到服务进程环境变量，实际直连目标、
+  MITM 无留痕。现在 worker/planner/mainagent 构建 ToolSet 时统一注入与 Bash
+  同源的出口代理与 CA。
+- **`job_start` 后台作业直连**：作业环境此前只取 `os.Environ()`，不继承任务
+  出口代理。现在用 `mergeProxyEnv` 覆盖父进程残留代理变量并注入平台出口；
+  Windows 下按大小写不敏感规则只保留大写键，避免 exec 去重把代理丢掉。
+- **Docker/宿主已有代理变量干扰**：合并时先剔除父进程同名变量，防止 POSIX
+  「重复变量取第一条」导致子进程仍读到旧代理。
+
 ## [0.4.82] - 2026-11-18
 
 ### 新增（issue #24 第二项：session_login 连续失败熔断）

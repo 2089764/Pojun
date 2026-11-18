@@ -26,6 +26,7 @@ import (
 	"github.com/Autumn-27/norma/transcript"
 	"github.com/chu0119/pojun/agent"
 	"github.com/chu0119/pojun/db"
+	"github.com/chu0119/pojun/egress"
 	"github.com/chu0119/pojun/hostd"
 	"github.com/chu0119/pojun/intercept"
 	"github.com/chu0119/pojun/listener"
@@ -33,6 +34,7 @@ import (
 	"github.com/chu0119/pojun/llmrec"
 	"github.com/chu0119/pojun/report"
 	"github.com/chu0119/pojun/traffic"
+	"github.com/chu0119/pojun/vault"
 )
 
 // BuildVersion is the backend application version, injected from cmd/pojun at
@@ -65,6 +67,10 @@ type Server struct {
 	// listeners 是红队回连接收器管理器（listener 包）：接住反弹 shell/OOB 回连
 	// 并留证。绑定端口无需特权（1024+），不经 hostd。
 	listeners *listener.Manager
+	// vault 是凭据保险库（加密存储 SSH 跳板密码/私钥等）。
+	vault *vault.Store
+	// egress 是 SSH 跳板管理器：本地 SOCKS5 → 跳板机出网，出口地址直接入代理池。
+	egress *egress.Manager
 
 	// concMu serializes concurrency-cap decisions (admission + reconcile) so a
 	// scheduler tick and an HTTP settings change / task creation can't both count
@@ -174,6 +180,14 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	s.jwtKey.Store(key)
 	s.listeners = listener.NewManager()
 	agent.SetListenerManager(s.listeners)
+	s.egress = egress.NewManager()
+	if m.pg != nil {
+		if vs, verr := vault.Open(keyDir, dataDir, m.pg); verr != nil {
+			log.Printf("[vault] 初始化失败（凭据保险库不可用）: %v", verr)
+		} else {
+			s.vault = vs
+		}
+	}
 	agent.SetConnectBackResolver(func(port int) agent.ConnectBack {
 		cb := s.ResolveConnectBack(port)
 		return agent.ConnectBack{Mode: cb.Mode, LHOST: cb.LHOST, LPORT: cb.LPORT, Via: cb.Via}
@@ -884,6 +898,20 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/proxypool", s.proxyPoolPut)
 	mux.HandleFunc("POST /api/proxypool/bulk", s.proxyPoolBulk)
 	mux.HandleFunc("POST /api/proxypool/check", s.proxyPoolCheck)
+	mux.HandleFunc("POST /api/proxypool/detect-local", s.proxyPoolDetectLocal)
+	mux.HandleFunc("POST /api/proxypool/subscription/fetch", s.proxyPoolSubscriptionFetch)
+	mux.HandleFunc("GET /api/proxypool/mihomo", s.proxyPoolMihomoStatus)
+	mux.HandleFunc("POST /api/proxypool/mihomo/install", s.proxyPoolMihomoInstall)
+	mux.HandleFunc("POST /api/proxypool/mihomo/start", s.proxyPoolMihomoStart)
+	mux.HandleFunc("POST /api/proxypool/mihomo/delays", s.proxyPoolMihomoDelays)
+	mux.HandleFunc("POST /api/proxypool/mihomo/stop", s.proxyPoolMihomoStop)
+	// SSH 跳板出口：登记跳板 → 本地 SOCKS5 → 入口地址入代理池。
+	mux.HandleFunc("GET /api/egress/ssh", s.listSSHProviders)
+	mux.HandleFunc("POST /api/egress/ssh", s.createSSHProvider)
+	mux.HandleFunc("DELETE /api/egress/ssh/{id}", s.deleteSSHProvider)
+	mux.HandleFunc("POST /api/egress/ssh/{id}/start", s.startSSHProvider)
+	mux.HandleFunc("POST /api/egress/ssh/{id}/stop", s.stopSSHProvider)
+	mux.HandleFunc("POST /api/egress/ssh/{id}/use", s.useSSHProvider)
 	mux.HandleFunc("POST /api/settings/web-search/test", s.testWebSearch)
 	mux.HandleFunc("GET /api/report", s.getReport)
 	mux.HandleFunc("GET /api/report/export", s.exportTaskDocx)

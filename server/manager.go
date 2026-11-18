@@ -22,6 +22,7 @@ import (
 	"github.com/chu0119/pojun/enrich"
 	"github.com/chu0119/pojun/guard"
 	"github.com/chu0119/pojun/intercept"
+	"github.com/chu0119/pojun/mihomo"
 	"github.com/chu0119/pojun/traffic"
 	"github.com/chu0119/pojun/vulnintel"
 )
@@ -294,6 +295,7 @@ type Manager struct {
 	pg          *pgdb.DB
 	assets      *pgdb.AssetStore
 	traffic     *traffic.Traffic       // process-wide recording proxy (may be nil)
+	mihomo      *mihomo.Manager        // 本机 Clash.Meta 内核（订阅 YAML → mixed-port → 代理池入口）
 	enrich      *enrich.Engine         // engine-side asset auto-completion (DNS/HTTP)
 	interceptor *intercept.Interceptor // user-configured tool-call interception rules
 	vulnintel   *vulnintel.Store       // public CVE/KEV intel store (agent search_vulns reads it)
@@ -355,6 +357,12 @@ const (
 	// (http/https/socks5). Empty = direct. Distinct from web_search_proxy (which
 	// only routes the search backend) and the per-profile LLM proxy.
 	settingGlobalProxy = "global_proxy"
+	// settingEgressStrict 是「严格出口」开关（公开版默认关，UI 可开）：
+	// 池已配置但全部熔断/不可用时，不回退直连，而让目标请求失败——配置了代理
+	// 就不允许真实 IP 漏出去。
+	settingEgressStrict = "egress_strict_proxy"
+	// settingEgressDirectFallback 是严格出口下的「直连但仍录制」兜底（默认关）。
+	settingEgressDirectFallback = "traffic_direct_record_fallback"
 	// settingInstallProxy 是「装东西」用的出网代理(http/https/socks5,空=直连)。
 	// 只作用于宿主工具安装时的 apt / curl / GitHub 下载,与 agent 的目标流量代理
 	// (settingGlobalProxy)、搜索代理、LLM 代理完全独立——国内环境常常需要一个
@@ -605,7 +613,8 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	if err := pg.EnsureLLMUsageTable(); err != nil {
 		log.Printf("[llmusage] create table: %v", err)
 	}
-	m := &Manager{dir: dir, pg: pg, assets: pg.Assets(), tasks: map[string]*Task{}, interceptor: intercept.New(pg)}
+	mihomoMgr := mihomo.New(dir)
+	m := &Manager{dir: dir, pg: pg, assets: pg.Assets(), tasks: map[string]*Task{}, interceptor: intercept.New(pg), mihomo: mihomoMgr}
 	if proxyAddr != "" {
 		tr, err := traffic.Open(filepath.Join(dir, "traffic"), proxyAddr)
 		if err != nil {
@@ -670,15 +679,36 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 		if err := m.traffic.SetUpstreamProxy(m.globalProxy); err != nil {
 			log.Printf("[proxy] 全局代理 %q 无效，已忽略: %v", m.globalProxy, err)
 		}
+		// 严格出口（默认关；UI 开关）。池全熔断时 fail-closed，禁止真实 IP 直连。
+		strict := pg.GetBool(settingEgressStrict, false)
+		m.traffic.SetStrictEgress(strict)
+		m.traffic.SetDirectRecordFallback(pg.GetBool(settingEgressDirectFallback, false))
 		// 代理池恢复(upstream 钩子是"池优先",池非空时覆盖上面的单代理)。
 		// 放 manager 的字段恢复段之后,与 capture 状态无关(池只影响出口选择)。
 		if pool := loadProxyPoolState(pg); pool != nil {
-			if err := m.traffic.SetProxyPool(pool.Entries, pool.Strategy); err != nil {
+			entries := pool.Entries
+			if !pg.GetBool(settingProxyAllowSocks5, true) {
+				kept := make([]traffic.PoolEntry, 0, len(entries))
+				for _, e := range entries {
+					if strings.HasPrefix(strings.ToLower(strings.TrimSpace(e.URL)), "socks5://") {
+						continue
+					}
+					kept = append(kept, e)
+				}
+				entries = kept
+			}
+			if !pool.Enabled {
+				entries = nil // 总开关关闭：与「池为空」同义
+			}
+			if err := m.traffic.SetProxyPool(entries, pool.Strategy); err != nil {
 				log.Printf("[proxypool] 池恢复失败: %v", err)
-			} else if len(pool.Entries) > 0 {
-				log.Printf("[proxypool] 已恢复 %d 个上游代理(策略 %s,池优先于全局代理)", len(pool.Entries), pool.Strategy)
+			} else if len(entries) > 0 {
+				log.Printf("[proxypool] 已恢复 %d 个上游代理(策略 %s,池优先于全局代理)", len(entries), pool.Strategy)
+				m.restoreProxyBreaks() // 重启后保留「已知不通」，避免死代理复活
 			}
 		}
+		// 池为空或全部熔断时，后台探测本机 Clash 混合端口（不阻塞启动）。
+		go autoDetectLocalProxyForManager(context.Background(), m)
 	}
 	m.enrich = enrich.New(m.assets, m.ProxyAddr, 4)
 	// Reconcile the seeded browser MCP with the persisted capture state, so a
@@ -1036,10 +1066,32 @@ func (m *Manager) ProxyAddr() string {
 	if m.traffic != nil && m.TrafficEnabled() {
 		return m.traffic.ProxyAddr()
 	}
+	// 捕获关闭时池仍然生效：直接从池里挑一个出口注入 Agent 的 HTTP_PROXY。
+	// 池空/全部熔断返回空串，回退全局代理或直连。
+	if m.traffic != nil {
+		if p := m.traffic.ProxyPoolPick(""); p != "" {
+			return p
+		}
+		if m.traffic.StrictEgress() && m.traffic.ProxyPoolConfigured() {
+			// 池已配置但全部熔断：有全局代理就走全局代理（仍是代理），
+			// 没有就返回哨兵地址让请求失败——绝不回退直连。
+			m.mu.RLock()
+			g := m.globalProxy
+			m.mu.RUnlock()
+			if g != "" {
+				return g
+			}
+			return strictEgressBlockProxy
+		}
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.globalProxy
 }
+
+// strictEgressBlockProxy 是严格出口的哨兵地址（连接必然失败）：宁可请求失败，
+// 也不让目标流量从真实 IP 直连出去。语义同 traffic.strictBlockProxy。
+const strictEgressBlockProxy = "http://127.0.0.1:1"
 
 // ProxyCACert returns the CA cert path agents must trust to verify HTTPS through
 // the egress proxy. Non-empty ONLY when traffic capture is on (the MITM re-signs
@@ -1145,6 +1197,9 @@ func (m *Manager) SetGlobalProxy(raw string) error {
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.mihomo != nil {
+		_ = m.mihomo.Stop()
+	}
 	if m.traffic != nil {
 		m.traffic.Close()
 	}

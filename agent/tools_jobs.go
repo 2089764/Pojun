@@ -210,7 +210,9 @@ func (t *ToolSet) jobStart() actool.CoreTool {
 			cmd.Dir = filepath.Dir(dir)
 			// 独立进程组：job_stop 杀整组，内层脚本/子进程一起结束（不再只杀外层包装 shell）。
 			cmd.SysProcAttr = jobSysProcAttr()
-			env := os.Environ()
+			// 后台作业与前台 Bash 必须同一出口：继承任务出口代理并覆盖父进程里
+			// 可能残留的代理变量（否则长扫描从真实 IP 直连、MITM 也无流量）。
+			env := mergeProxyEnv(os.Environ(), t.egressProxy, t.egressCA)
 			for _, kv := range strings.Split(a.Env, "&") {
 				k, v, ok := strings.Cut(kv, "=")
 				if ok && strings.TrimSpace(k) != "" {

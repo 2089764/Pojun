@@ -1590,3 +1590,34 @@ CREATE TABLE IF NOT EXISTS finding_updates (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_finding_updates_finding ON finding_updates(finding_id, id DESC);
+
+-- ============================================================================
+-- 凭据保险库（v0.4.83）：供 SSH 跳板出口等「需要保存密码/私钥」的功能使用。
+-- 密文列由 vault 包加解密（XChaCha20-Poly1305，主密钥在 data/vault.key）；
+-- 表在这里保证任何入口（含不初始化 vault 的场景）都存在，删除任务时可清理。
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS credentials (
+    id BIGSERIAL PRIMARY KEY,
+    task_id BIGINT NOT NULL DEFAULT 0,
+    asset_id BIGINT NOT NULL DEFAULT 0,
+    kind TEXT NOT NULL,
+    username TEXT NOT NULL DEFAULT '',
+    secret_enc BYTEA NOT NULL,
+    secret_hint TEXT NOT NULL DEFAULT '',
+    privilege TEXT NOT NULL DEFAULT '',
+    meta JSONB NOT NULL DEFAULT '{}',
+    expires_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_used_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_credentials_task ON credentials(task_id, asset_id);
+CREATE TABLE IF NOT EXISTS credential_access_log (
+    id BIGSERIAL PRIMARY KEY,
+    credential_id BIGINT NOT NULL,
+    task_id BIGINT NOT NULL DEFAULT 0,
+    intent_id BIGINT NOT NULL DEFAULT 0,
+    actor TEXT NOT NULL DEFAULT '',
+    action TEXT NOT NULL,
+    at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_credential_audit ON credential_access_log(credential_id, at DESC);

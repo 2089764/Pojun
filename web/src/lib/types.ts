@@ -1853,8 +1853,19 @@ export interface ProxyPoolRunning {
 export interface ProxyPoolState {
   entries: ProxyPoolEntry[];
   strategy: string;
+  /** 总开关：false 时条目不参与出口选择（回退全局代理/直连）。 */
+  enabled: boolean;
   running: ProxyPoolRunning[];
+  /** 未被熔断的条目数（0 = 当前全部不可用）。 */
+  usable?: number;
+  total?: number;
+  /** 实际参与出口选择的条目数（socks5 策略过滤后）。 */
+  effective_total?: number;
+  socks5_blocked?: number;
+  socks5_allowed?: boolean;
   capturing: boolean;
+  /** 严格出口：池已配置但全部不可用时禁止回退直连（默认开）。 */
+  strict?: boolean;
   check_target?: string;
   health_minutes?: number;
   health_cooldown?: number;
@@ -1973,3 +1984,71 @@ export interface C2ConfigPatch {
   key?: string;
   iface?: string;
 }
+
+export interface ProxyPoolSubscription {
+  format: "uri" | "clash";
+  supported: string[];
+  text: string;
+  unsupported: number;
+  invalid: number;
+  /** 订阅里混入的非节点信息条数（剩余流量/到期时间/官网等），已忽略。 */
+  ignored?: number;
+  note?: string;
+  /** 仅 format=clash：完整 YAML（含节点凭据，前端只用于启动 mihomo）。 */
+  clash_yaml?: string;
+  proxies?: number;
+  direct_nodes?: number;
+  local_ports?: number[];
+  proxy_groups?: number;
+  group_names?: string[];
+  proxy_providers?: number;
+  /** Clash 节点：只有名字与类型，不含账号/地址。 */
+  nodes?: { name: string; type: string }[];
+  /** Clash 分组：名字、类型与成员节点名（供节点管理页展示）。 */
+  groups?: { name: string; type: string; members?: string[] }[];
+}
+
+export interface LocalProxyCandidate {
+  url: string;
+  port: number;
+  ok: boolean;
+  latency_ms: number;
+  exit_ip?: string;
+  error?: string;
+  source: string;
+}
+
+export interface MihomoStatus {
+  running: boolean;
+  installed: boolean;
+  port: number;
+  pid: number;
+  binary: string;
+  config_path: string;
+  log_path: string;
+  started_at?: string;
+  version?: string;
+  last_error?: string;
+  /** 配置文件里实际生效的出口（从 rules MATCH 反推）。 */
+  outbound?: string;
+  /** group/node/load-balance/url-test/fallback */
+  mode?: string;
+  /** 出口组包含的节点名（直接指定节点时为单个）。 */
+  nodes?: string[];
+  /** 本次启动的 external-controller 端口（只绑回环，用于节点测速）。 */
+  controller_port?: number;
+}
+
+export interface SSHProvider {
+  id: number;
+  name: string;
+  host: string;
+  port: number;
+  user: string;
+  credential_id?: number;
+  created_at?: string;
+  status?: string;
+  socks_addr?: string;
+  started_at?: string;
+}
+
