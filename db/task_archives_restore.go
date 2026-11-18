@@ -81,6 +81,17 @@ WHERE relation.source_task_id=$1 LIMIT 1`, taskID).Scan(&dependent)
 	if _, err := tx.Exec(`DELETE FROM side_question_sessions WHERE task_id=$1`, taskID); err != nil {
 		return err
 	}
+	// 审计 F2：归档同样是「任务退出授权窗口」的时点——敏感凭据（密码/私钥密文）
+	// 不应继续保留；恢复后需要操作员重新录入。task_progress 一并清理。
+	if _, err := tx.Exec(`DELETE FROM credentials WHERE task_id=$1`, taskID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM credential_access_log WHERE task_id=$1`, taskID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM task_progress WHERE task_id=$1`, taskID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`DELETE FROM findings WHERE task_id=$1`, taskID); err != nil {
 		return err
 	}
