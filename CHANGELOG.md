@@ -4,6 +4,29 @@
 
 ## [Unreleased]
 
+### 修复
+
+- **去掉会到达目标侧的产品标识**：PoC 脚手架模板、落盘脚本与代码内置提示语里带着
+  平台名。这些字符串会随请求或写入落到被渗透方——SSRF 的参数值、上传请求的
+  multipart boundary、写进目标磁盘的文件正文、写进客户业务库的测试对象名、
+  agent 工作目录里的脚本文件名。客户侧蓝队会把它们当成攻击者的签名，进而产生
+  指向本产品的假 IoC、误导应急响应。
+  - `poc_scaffold`：SSRF canary、multipart boundary、上传 shell 回显去名；
+    JWT 弱口令表删掉 `pojun`（它不是常见弱口令），候选由 9 条变 8 条
+  - `verification_depth` 内置提示语：写进目标测试对象的 marker 由 `pojun-test-*`
+    改为 `qa-test-*`，前缀仍可用于枚举清理
+  - 落盘脚本：`pojun-probe.sh` → `probe.sh`、`pojun-jsaudit.py` → `js_audit.py`，
+    脚本抬头与 cookie jar 注释同步去名
+  - `enrich`：对目标站点的探测 UA 去品牌（接口已接线，但 `ProbeSite` / `ResolveDomain`
+    当前没有调用点，属接线前加固）
+- **落盘脚本改为每次覆盖写**：脚本文件名去掉产品名后，与模型在同一个工作目录里
+  自建的文件名可能撞车，而原先的复用逻辑只看 `os.Stat` 存在即复用——一旦撞车，
+  工具会执行模型写的脚本。现在每次调用都覆盖写回平台脚本。
+- **新增回归断言** `agent/target_identity_test.go`：断言 PoC 模板、落盘脚本正文与文件名、
+  代码内置的十二段系统提示语、以及 `skills/*/scripts/*.py` 都不含平台/能力标识。
+  守卫范围刻意限定在 target-facing 与模型可见的产物，不含日志、错误文案、CLI 名
+  与发往 GitHub/GHSA 等第三方的 UA。
+
 ## [0.4.86] - 2026-11-18
 
 ### 新增（PR #32，感谢 @Conly-Zy）

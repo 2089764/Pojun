@@ -35,10 +35,13 @@ import (
 	actool "github.com/Autumn-27/norma/tool"
 )
 
-const jsAuditScript = `#!/usr/bin/env python3
-"""pojun js_audit: SPA/webpack 前端源码泄露审计。
+// jsAuditScriptName 是前端源码审计脚本在 Agent 工作目录里的文件名。
+const jsAuditScriptName = "js_audit.py"
 
-用法: python3 pojun-jsaudit.py --out <outdir> <url1> [url2 ...]
+const jsAuditScript = `#!/usr/bin/env python3
+"""js_audit: SPA/webpack 前端源码泄露审计。
+
+用法: python3 js_audit.py --out <outdir> <url1> [url2 ...]
 url 可以是入口 HTML（提取 <script src>）或 .js 文件本体。
 每行输出一个 JSON 事件；最后一行 type=summary。仅标准库；
 http(s)_proxy 环境变量自动生效（流量走记录代理）；证书校验关闭（同 curl -k）。
@@ -312,10 +315,8 @@ func (t *ToolSet) ensureJsAuditScript() string {
 	if strings.TrimSpace(t.runDir) == "" {
 		return ""
 	}
-	p := filepath.Join(t.runDir, "pojun-jsaudit.py")
-	if _, err := os.Stat(p); err == nil {
-		return p
-	}
+	// 每次覆盖写，不复用既有同名文件（理由同 ensureProbeScript）。
+	p := filepath.Join(t.runDir, jsAuditScriptName)
 	if err := os.WriteFile(p, []byte(jsAuditScript), 0o755); err != nil {
 		return ""
 	}
