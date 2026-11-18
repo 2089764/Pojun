@@ -52,7 +52,8 @@ type authCheckResult struct {
 // 判定规则与 worker prompt 里给的一致：SuccessStatus（0=不校验）与
 // SuccessContains 都满足才算成功；都没配时以 2xx/3xx 作为成功。
 // 返回详情时不带密码/TOTP/响应正文（只给状态码与命中说明）。
-func runAuthCheck(cfg *db.TaskAuthConfig) authCheckResult {
+// proxyAddr / caCert 是平台出口（记录代理 / 代理池 / 全局代理）；空串=直连（测试）。
+func runAuthCheck(cfg *db.TaskAuthConfig, proxyAddr, caCert string) authCheckResult {
 	res := authCheckResult{CheckedAt: time.Now().UTC().Format(time.RFC3339)}
 	start := time.Now()
 	if cfg == nil || !cfg.Enabled {
@@ -124,6 +125,9 @@ func runAuthCheck(cfg *db.TaskAuthConfig) authCheckResult {
 		req.Header.Set(k, v)
 	}
 	client := &http.Client{Timeout: 10 * time.Second}
+	if tr := proxyTransport(proxyAddr, caCert); tr != nil {
+		client.Transport = tr
+	}
 	resp, err := client.Do(req)
 	res.ElapsedMS = time.Since(start).Milliseconds()
 	if err != nil {
@@ -178,5 +182,5 @@ func (s *Server) taskAuthCheck(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "该任务未配置登录凭据")
 		return
 	}
-	writeJSON(w, 200, runAuthCheck(t.AuthConfig))
+	writeJSON(w, 200, runAuthCheck(t.AuthConfig, s.m.ProxyAddr(), s.m.ProxyCACert()))
 }

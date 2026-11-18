@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### 修复
+
+- **自定义 http 工具与任务登录自检接入平台出口**：两者此前用裸 `http.Client`
+  从平台真实 IP 直连目标，绕过记录代理与出口池；`use_recording_proxy` 勾选后
+  还会把已带 scheme 的代理地址二次拼成 `http://http://…` 而失效。现在：
+  - 自定义 http 工具未配置 `proxy` 时默认走 `Manager.ProxyAddr()`
+    （捕获开=记录代理并信任 MITM CA；否则=出口池/全局代理；严格出口失败即失败），
+    显式 `proxy` 仍可覆盖；
+  - 任务登录自检同样走平台出口；
+  - 代理地址同时接受 `host:port` 与 `scheme://host:port` 两种写法。
+
 ## [0.4.86] - 2026-11-18
 
 ### 新增（PR #32，感谢 @Conly-Zy）
