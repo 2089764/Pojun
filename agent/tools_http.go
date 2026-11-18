@@ -631,7 +631,7 @@ func (t *ToolSet) sessionLogin() actool.CoreTool {
 			"url":          str("登录接口绝对 URL"),
 			"method":       str("HTTP 方法，默认 POST"),
 			"asset_id":     intp("凭据登记在哪个资产上（可选；优先使用）"),
-			"auth_index":   intp("用该资产上的第几条凭据（从 0 开始）"),
+			"auth_index":   intp("用该资产上的第几条凭据（从 0 开始，顺序同 list_assets 的 auth 数组；无效条目会明确报错）"),
 			"username":     str("用户名（可选，asset_id 为空时用）"),
 			"password":     str("密码（可选）"),
 			"token":        str("token/会话值（可选）"),
@@ -692,6 +692,11 @@ func (t *ToolSet) sessionLogin() actool.CoreTool {
 					return actool.Errorf(fmt.Sprintf("资产 %d 只有 %d 条凭据，auth_index 越界", a.AssetID, len(entries))), nil
 				}
 				e := entries[idx]
+				if !e.valid() {
+					return actool.Errorf(fmt.Sprintf(
+						"资产 %d 的 auth_index=%d 不是有效凭据条目（无可用字段）；有效索引：%s。请改用其中一条（顺序同 list_assets 的 auth 数组）",
+						a.AssetID, idx, validAuthIndices(entries))), nil
+				}
 				user, pass, token = e.Username, e.Password, e.Token
 				authKindLabel = fmt.Sprintf("资产#%d 第 %d 条(%s)", a.AssetID, idx, authKind(e))
 				// 预置凭据熔断：已因连续 401/403 熔断时，本地直接拒绝、不发任何

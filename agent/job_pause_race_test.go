@@ -22,7 +22,7 @@ func TestPauseCleanupWaitsForInFlightJobStart(t *testing.T) {
 	launched := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once
-	jobStartAfterStartHook = func() {
+	jobStartAfterStartHook = func(_ int) {
 		once.Do(func() { close(launched) })
 		<-release
 	}
