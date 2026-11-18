@@ -79,7 +79,7 @@ func TestDiagnosticsV2IncludesFindingsAndEntities(t *testing.T) {
 }
 
 // v0.8：诊断包不再脱敏，代理设置按全量导出（用户明确要求全量诊断）。
-func TestDiagSettingsKeepsFullProxyCredentials(t *testing.T) {
+func TestDiagSettingsMasksProxyCredentials(t *testing.T) {
 	dsn, _, err := db.DSN()
 	if err != nil {
 		t.Skip("no test database configured")
@@ -96,8 +96,8 @@ func TestDiagSettingsKeepsFullProxyCredentials(t *testing.T) {
 	if v == "" {
 		t.Fatal("global_proxy 丢字段")
 	}
-	if !strings.Contains(v, "secret") {
-		t.Fatalf("诊断包应保留全量代理设置，得到 %q", v)
+	if strings.Contains(v, "secret") || strings.Contains(v, "alice") {
+		t.Fatalf("诊断包必须掩码代理凭据，得到 %q", v)
 	}
 }
 
