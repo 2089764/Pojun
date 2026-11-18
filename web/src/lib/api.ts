@@ -293,7 +293,22 @@ export const api = {
   // ---- auth ----
   authStatus: () => get<{ initialized: boolean }>("/auth/status"),
   login: (username: string, password: string) => post<{ token: string }>("/auth/login", { username, password }),
-  initPassword: (password: string) => post<{ token: string }>("/auth/init", { password }),
+  // 首次初始化需携带服务端 data/setup-token 的内容（审计 B2：防公网抢占初始化）。
+  initPassword: async (password: string, setupToken?: string) => {
+    const headers: Record<string, string> = {};
+    if (setupToken) headers["X-Setup-Token"] = setupToken;
+    const token = getToken();
+    const r = await fetch("/api/auth/init", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify({ password }),
+    });
+    if (!r.ok) {
+      const message = await r.text().catch(() => "");
+      throw new Error(message || `初始化失败: ${r.status}`);
+    }
+    return (await r.json()) as { token: string };
+  },
   changePassword: (oldPassword: string, newPassword: string) =>
     post<{ ok: boolean }>("/auth/change-password", { old_password: oldPassword, new_password: newPassword }),
 

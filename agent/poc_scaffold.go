@@ -206,7 +206,7 @@ for p in PAYLOADS:
     st, _, bd, ms = fetch(inject(BASE, PARAM, p))
     show(p, st, bd, ms)
     low = bd.decode("utf-8", "replace") if isinstance(bd, bytes) else str(bd)
-    if re.search(r"uid=\\d+\\(", low) or re.search(r"(?i)(windows|nt authority|administrator)", low):
+    if re.search(r"uid=\d+\(", low) or re.search(r"(?i)(windows|nt authority|administrator)", low):
         hits.append(p); print("MATCH cmdi payload=%r status=%s" % (p, st))
 finish(hits, len(PAYLOADS))
 `,

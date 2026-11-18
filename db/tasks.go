@@ -675,6 +675,21 @@ DELETE FROM assets a USING deletable d WHERE a.id=d.id`, id, expID)
 	if _, err := tx.Exec(`DELETE FROM autopilot_events WHERE task_id=$1`, strconv.FormatInt(id, 10)); err != nil {
 		return result, err
 	}
+	// 审计 F2：这几张表 task_id 均无外键，硬删除时若不显式清理会留下孤儿——
+	//   intercept_pending 审批项让审批页角标永不消失；
+	//   credentials/credential_access_log 让敏感凭据（密码/私钥密文）超出授权窗口残留。
+	if _, err := tx.Exec(`DELETE FROM intercept_pending WHERE task_id=$1`, strconv.FormatInt(id, 10)); err != nil {
+		return result, err
+	}
+	if _, err := tx.Exec(`DELETE FROM task_progress WHERE task_id=$1`, strconv.FormatInt(id, 10)); err != nil {
+		return result, err
+	}
+	if _, err := tx.Exec(`DELETE FROM credential_access_log WHERE task_id=$1`, id); err != nil {
+		return result, err
+	}
+	if _, err := tx.Exec(`DELETE FROM credentials WHERE task_id=$1`, id); err != nil {
+		return result, err
+	}
 	if _, err := tx.Exec(`DELETE FROM tasks WHERE id=$1`, id); err != nil {
 		return result, err
 	}
