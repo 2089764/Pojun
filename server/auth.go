@@ -2,6 +2,8 @@ package server
 
 import (
 	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"math/big"
@@ -314,6 +316,35 @@ func (s *Server) requireAuth(h http.Handler) http.Handler {
 	})
 }
 
+// setupTokenFilename 是首次初始化令牌文件名（dataDir 下，0600）。
+// 审计 B2：公网部署后、管理员完成 /setup 之前存在抢占窗口——未认证者可抢先
+// POST /api/auth/init 设置自己的密码接管实例。初始化改为必须携带该 token。
+const setupTokenFilename = "setup-token"
+
+// ensureSetupToken 确保「密码未初始化」的实例持有一次性 setup token：
+// 文件缺失则生成（32 字节 hex，0600），存在则复用。密码已设置的实例不生成。
+// 返回 (token, 文件路径, err)。
+func ensureSetupToken(dataDir string) (string, string, error) {
+	if strings.TrimSpace(dataDir) == "" {
+		return "", "", errors.New("dataDir 为空，无法生成 setup token")
+	}
+	path := filepath.Join(dataDir, setupTokenFilename)
+	if b, err := os.ReadFile(path); err == nil {
+		if tok := strings.TrimSpace(string(b)); tok != "" {
+			return tok, path, nil
+		}
+	}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return "", "", err
+	}
+	tok := hex.EncodeToString(key)
+	if err := os.WriteFile(path, []byte(tok), 0o600); err != nil {
+		return "", "", err
+	}
+	return tok, path, nil
+}
+
 // GET /api/auth/status — reports whether the admin password has been initialised.
 // 读失败必须回 503 而不是 initialized:false：前端在 initialized:false 时会把用户
 // 送到 /setup 去设置密码（login/page.tsx），把数据库故障包装成 200 等于把用户往
@@ -349,6 +380,19 @@ func (s *Server) authInit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 403, "密码已设置")
 		return
 	}
+	// 审计 B2：未初始化实例必须携带 setup token（data/setup-token，0600），
+	// 否则公网上任何先到的请求都能设置密码接管实例。成功后删除文件。
+	token, tokenPath, terr := ensureSetupToken(s.dataDir)
+	if terr != nil {
+		writeErr(w, 503, "生成 setup token 失败: "+terr.Error())
+		return
+	}
+	if r.Header.Get("X-Setup-Token") != token {
+		w.Header().Set("X-Setup-Token-Path", tokenPath)
+		writeErr(w, 403, "首次初始化需要 setup token：读取服务器上的 "+tokenPath+
+			"，放在请求头 X-Setup-Token 中重试（本地部署见启动日志）")
+		return
+	}
 	var req struct {
 		Password string `json:"password"`
 	}
@@ -377,6 +421,7 @@ func (s *Server) authInit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 403, "密码已设置")
 		return
 	}
+	_ = os.Remove(filepath.Join(s.dataDir, setupTokenFilename))
 	tok, err := signJWT(s.currentJWTKey())
 	if err != nil {
 		writeErr(w, 500, "token 生成失败")

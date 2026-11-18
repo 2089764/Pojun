@@ -436,3 +436,40 @@ func TestUnknownNames(t *testing.T) {
 		t.Fatalf("unknown=%d want 2", got)
 	}
 }
+
+// 审计 B4：订阅可注入 listeners 数组（每项自带 listen/port），
+// writeConfig 必须整键删除——bind-address/allow-lan 只约束 mixed-port。
+func TestWriteConfigStripsListenersArray(t *testing.T) {
+	dir := t.TempDir()
+	m := New(dir)
+	src := `mixed-port: 7890
+allow-lan: false
+listeners:
+  - name: open
+    type: socks
+    port: 10808
+    listen: 0.0.0.0
+proxies:
+  - name: n1
+    type: http
+    server: 1.2.3.4
+    port: 8080
+rules:
+  - MATCH,DIRECT
+`
+	path, err := m.writeConfig(src, 17891, StartOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg["listeners"]; ok {
+		t.Fatalf("listeners 未被删除：恶意订阅可在非回环地址开监听")
+	}
+}

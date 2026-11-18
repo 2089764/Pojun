@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"strconv"
 	"strings"
 
 	actool "github.com/Autumn-27/norma/tool"
@@ -111,13 +111,29 @@ func (t *ToolSet) authRequest() actool.CoreTool {
 			}
 			idx := a.AuthIndex
 			if idx < 0 {
-				idx = 0
+				// 审计 F1：未传索引时选第一条【有效】凭据（保持旧行为的便利性）。
+				first := -1
+				for i, e := range entries {
+					if e.valid() {
+						first = i
+						break
+					}
+				}
+				if first < 0 {
+					return actool.Errorf(fmt.Sprintf(
+						"资产 %d 上没有有效凭据条目（共 %d 条占位）", a.AssetID, len(entries))), nil
+				}
+				idx = first
 			}
 			if idx >= len(entries) {
 				return actool.Errorf(fmt.Sprintf(
 					"资产 %d 上只有 %d 条凭据，auth_index=%d 越界", a.AssetID, len(entries), idx)), nil
 			}
 			entry := entries[idx]
+			if !entry.valid() {
+				return actool.Errorf(fmt.Sprintf(
+					"资产 %d 的 auth_index=%d 不是有效凭据条目；有效索引：%s", a.AssetID, idx, validAuthIndices(entries))), nil
+			}
 
 			method := strings.ToUpper(strings.TrimSpace(a.Method))
 			if method == "" {
@@ -144,13 +160,20 @@ func (t *ToolSet) authRequest() actool.CoreTool {
 // 资产上的 auth 是 []map[string]any（键名不固定，历史上用过 username/
 // password/token/type/description）。这里做宽松解析：认得就用，不认得的
 // 键忽略，但**至少要有一个可用字段**才算一条凭据。
+// parseAuthEntries 把资产 auth 数组转成与【原数组等长同序】的凭据列表。
+//
+// 审计 F1：此前会过滤空条目并把 token 优先重排——list_assets 给模型看的是原始
+// 数组顺序，而 session_login/auth_request 按 parseAuthEntries 的索引取用，两边
+// 错位会让模型选中的凭据与实际发出的不一致（误判凭据无效、误计登录熔断）。
+// 现在保持原序：无效条目以零值占位，调用方用 authEntry.valid() 判断并报错。
 func parseAuthEntries(raw []map[string]any) []authEntry {
-	out := []authEntry{}
+	out := make([]authEntry, 0, len(raw))
 	for _, m := range raw {
+		var e authEntry
 		if m == nil {
+			out = append(out, e)
 			continue
 		}
-		var e authEntry
 		for k, v := range m {
 			s, _ := v.(string)
 			s = strings.TrimSpace(s)
@@ -167,21 +190,26 @@ func parseAuthEntries(raw []map[string]any) []authEntry {
 				e.Description = s
 			}
 		}
-		if e.Username == "" && e.Password == "" && e.Token == "" {
-			continue // 没有可用字段，不算一条凭据
-		}
 		out = append(out, e)
 	}
-	// 排序：token 优先（无需拼装），其次账号密码——默认 auth_index=0 拿到最省事的那条。
-	sort.SliceStable(out, func(i, j int) bool {
-		ti := out[i].Token != ""
-		tj := out[j].Token != ""
-		if ti != tj {
-			return ti
-		}
-		return false
-	})
 	return out
+}
+
+// valid 判断这条凭据是否至少有一个可用字段。
+func (e authEntry) valid() bool {
+	return e.Username != "" || e.Password != "" || e.Token != ""
+}
+
+// validAuthIndices 返回有效凭据的下标列表（与资产 auth 数组原始下标一致），
+// 供错误提示引导模型改选。
+func validAuthIndices(entries []authEntry) string {
+	ids := make([]string, 0, len(entries))
+	for i, e := range entries {
+		if e.valid() {
+			ids = append(ids, strconv.Itoa(i))
+		}
+	}
+	return strings.Join(ids, ",")
 }
 
 // authKind 描述这条凭据的形态（用于返回结果里的说明，不含凭据值）。

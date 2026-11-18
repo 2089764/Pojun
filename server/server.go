@@ -193,6 +193,15 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		return agent.ConnectBack{Mode: cb.Mode, LHOST: cb.LHOST, LPORT: cb.LPORT, Via: cb.Via}
 	})
 	s.initSideQuestions()
+	// 审计 B2：未初始化实例生成一次性 setup token（data/setup-token，0600）并打进
+	// 启动日志——公网部署后、管理员完成 /setup 之前，未认证者不能抢占 /api/auth/init。
+	if m.pg != nil {
+		if hash, _, gerr := m.pg.GetSetting(authPassKey); gerr == nil && hash == "" {
+			if tok, tpath, terr := ensureSetupToken(dataDir); terr == nil {
+				log.Printf("[auth] 管理员密码未初始化：setup token=%s（文件 %s，0600；首次 /api/auth/init 需携带请求头 X-Setup-Token）", tok, tpath)
+			}
+		}
+	}
 	// 熔断阈值/冷却是失败路径上的热参数，启动时把全局重试策略推给 Registry 一次；
 	// 之后每次保存策略再推一次（saveLLMRetryPolicy）。
 	s.applyRetryPolicy()
@@ -1057,7 +1066,7 @@ func (s *Server) Handler() http.Handler {
 	// /api/* goes through CORS + JWT; everything else is served by the embedded
 	// frontend (public — auth is enforced client-side and on the API). With the
 	// no-embed build the webui handler just 404s (run `next dev` separately).
-	api := securityHeaders(s.requireAuth(mux))
+	api := securityHeaders(limitRequestBody(s.requireAuth(mux)))
 	root := http.NewServeMux()
 	root.Handle("/api/", api)
 	root.Handle("/", s.webuiHandler())
@@ -4471,6 +4480,34 @@ func (s *Server) gc(w http.ResponseWriter, r *http.Request) {
 // securityHeaders 替代了原来的 cors 中间件：前端与 API 同源部署，
 // Access-Control-Allow-Origin:* 在这里没有任何正当用途，只会放宽跨站读取。
 // 同时补上公网部署需要的基础安全头。
+// maxAPIBody 是已认证 JSON 请求体的默认上限（绕过 decode() 直连 NewDecoder 的
+// handler 也被它罩住）。审计 B3：无上限的 json.Decoder 会把整个 body 载入内存，
+// 认证用户单个大请求即可打爆内存。
+const maxAPIBody = 32 << 20
+
+// limitRequestBody 给所有 API 请求体设上限。豁免两个自带更大 MaxBytesReader 的
+// 文件上传端点（workspace 512MB / chat 128MB）；其余文件上传（skill 20MB 等）
+// 均低于该上限，不受影响。
+func limitRequestBody(next http.Handler) http.Handler {
+	exempt := map[string]bool{
+		"POST /api/workspace/upload": true,
+		"POST /api/chat/upload":      true,
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if exempt[r.Method+" "+r.URL.Path] {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.ContentLength > maxAPIBody {
+			writeErr(w, http.StatusRequestEntityTooLarge,
+				fmt.Sprintf("请求体过大（上限 %d MB）", maxAPIBody>>(10*3)))
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxAPIBody)
+		next.ServeHTTP(w, r)
+	})
+}
+
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
