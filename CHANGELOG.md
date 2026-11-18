@@ -4,6 +4,33 @@
 
 ## [Unreleased]
 
+### 修复
+
+- **`scan_with_nuclei` 组出的命令强制带出口代理**：`ToolSet.egressProxy` 经 `ScanArgs.Proxy`
+  流进 `vulnintel.BuildNucleiCmd`，追加 `-proxy <url>`（两个独立 argv 元素，仍逐参数单引号）：
+  裸 `host:port` 自动补 `http://`，已带 scheme 原样透传（含严格出口哨兵 `http://127.0.0.1:1`），
+  空代理不发射，含逗号直接报错（`-proxy` 是 `string[]`，逗号会被当多代理分隔符拆坏），
+  缺端口同样报错（nuclei 启动时按 host:port 探活，缺端口会直接 FATAL）。
+  此前这条只靠 worker 提示词，模型可以不执行。（`server` 级 `buildDomainReg` 注册表
+  不注入 `egressProxy`，属已知缺口，见 `docs/代理与出口链路.md`。）
+- **提示词删除 nuclei 不存在的 `-random-agent`**：v3.11.1 既无该 flag 也无 `-user-agent`，
+  照抄示例必然失败；同时说明 `scan_with_nuclei` 已自动带 `-proxy`、手工命令才需自己加。
+  涉及 `agent/ops_tails.go`、`skills/component-vuln-intel/SKILL.md`，以及
+  `skills/src-hunting/references/`（`recon-methodology`、`subdomain-takeover-test`
+  的手工命令用 `${POJUN_PROXY:+-proxy "$POJUN_PROXY"}`，未配置代理时不发射空 `-proxy`）。
+- 工具 note 在配置出口代理时前置排查提示（`-silent` 下空输出≠无命中），与正文之间留空格分隔。
+- GNU `timeout` 包装的秒数改由 `TimeoutTotal` 推导（与 `BuildNucleiCmd` 共用
+  `vulnintel.EffectiveTimeout` 的 0→10m / >30m→30m 钳制），不再写死 600 秒。
+
+### 测试
+
+- `vulnintel/nuclei_test.go`：`TestNormalizeNucleiProxy`（含缺端口）、`TestEffectiveTimeout`、
+  `TestBuildNucleiCmdProxy`（含 CVE/severity + `-proxy` 组合与 `-proxy` 恰好一次）。
+- `agent/tools_vulnintel_test.go`：`TestNucleiScanArgsCarriesEgressProxy`、
+  `TestNucleiBashCommand`（按实际环境计算 `timeout` 前缀，含 10m/30m 秒数推导与 `-proxy` 组合）、
+  `TestNucleiEgressNote`。
+- `agent/prompt_tails_test.go`：worker 提示不含 `-random-agent`，含 `-proxy` 与自动注入说明。
+
 ## [0.4.86] - 2026-11-18
 
 ### 新增（PR #32，感谢 @Conly-Zy）

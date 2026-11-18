@@ -36,6 +36,7 @@ tags:
 
 - 先确认模板覆盖：`nuclei -t <匹配的模板/标签> -u <url> -severity high,critical -stats`；
 - 平台工具 `scan_with_nuclei` 会组好命令并留流量；自己跑时结果落文件后 `save_evidence`；
+- 平台配了出口代理时，手工 `nuclei` 命令一律追加 `-proxy "$POJUN_PROXY"`；`scan_with_nuclei` 已自动带，不要重复加。
 - 模板命中 ≠ 漏洞：核对请求/响应是否真的触发（有些模板只匹配版本 banner）；
 - 高危模板（如 RCE）先确认目标有授权且不影响业务，再执行。
 
