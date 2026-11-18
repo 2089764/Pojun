@@ -12,6 +12,8 @@ import { auth } from "@/lib/auth";
 
 export default function SetupPage() {
   const router = useRouter();
+  // 审计 B2：首次初始化需要服务器生成的 setup token（data/setup-token，0600）
+  const [setupToken, setSetupToken] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
@@ -47,7 +49,7 @@ export default function SetupPage() {
     setLoading(true);
     setError("");
     try {
-      const { token } = await api.initPassword(password);
+      const { token } = await api.initPassword(password, setupToken.trim());
       auth.setToken(token);
       router.replace("/function/tasks");
     } catch (err) {
@@ -81,6 +83,20 @@ export default function SetupPage() {
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="setup-token">Setup Token（首次部署）</Label>
+                <Input
+                  id="setup-token"
+                  value={setupToken}
+                  onChange={(e) => setSetupToken(e.target.value)}
+                  placeholder="服务器 data/setup-token 文件的内容"
+                  autoComplete="off"
+                />
+                <p className="text-muted-foreground text-xs">
+                  公网部署防抢占：token 在服务器启动日志与 <code>data/setup-token</code>（0600）中；
+                  Docker 为容器内 <code>/app/data/setup-token</code>。初始化成功后自动删除。
+                </p>
+              </div>
               <div className="space-y-1.5">
                 <Label htmlFor="password">新密码</Label>
                 <Input

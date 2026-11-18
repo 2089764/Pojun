@@ -193,6 +193,15 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 		return agent.ConnectBack{Mode: cb.Mode, LHOST: cb.LHOST, LPORT: cb.LPORT, Via: cb.Via}
 	})
 	s.initSideQuestions()
+	// 审计 B2：未初始化实例生成一次性 setup token（data/setup-token，0600）并打进
+	// 启动日志——公网部署后、管理员完成 /setup 之前，未认证者不能抢占 /api/auth/init。
+	if m.pg != nil {
+		if hash, _, gerr := m.pg.GetSetting(authPassKey); gerr == nil && hash == "" {
+			if tok, tpath, terr := ensureSetupToken(dataDir); terr == nil {
+				log.Printf("[auth] 管理员密码未初始化：setup token=%s（文件 %s，0600；首次 /api/auth/init 需携带请求头 X-Setup-Token）", tok, tpath)
+			}
+		}
+	}
 	// 熔断阈值/冷却是失败路径上的热参数，启动时把全局重试策略推给 Registry 一次；
 	// 之后每次保存策略再推一次（saveLLMRetryPolicy）。
 	s.applyRetryPolicy()
