@@ -497,6 +497,7 @@ export default function SystemSettingsPage() {
               <br />
               开启<b>流量捕获</b>时，它作为记录代理的<b>上游</b>（流量仍全量落库，再经此代理出网）；关闭捕获时，直接注入
               Agent 的 bash / WebFetch 出网。与网络搜索代理、LLM 代理相互独立。
+              检查和下载程序更新优先使用宿主环境中的「装机代理」，未配置时才使用全局代理。
               <br />
               <b>提示</b>：socks5 在<b>关闭捕获</b>时依赖各命令行工具对 <code>ALL_PROXY</code> 的支持（curl
               可用，部分工具可能忽略）； 若主要用 socks5，建议开启流量捕获——此路径由 MITM

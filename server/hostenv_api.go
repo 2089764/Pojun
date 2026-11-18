@@ -65,8 +65,7 @@ func (s *Server) hostdProbe(ctx context.Context) (bool, string) {
 	return true, ""
 }
 
-// installProxy 读「安装期出网代理」设置。与运行期的目标代理/LLM 代理无关:
-// 它只作用于 apt/curl/GitHub 下载。
+// installProxy 读取「装机代理」设置，供宿主工具安装和程序更新等维护请求使用。
 //
 // 环境变量 POJUN_INSTALL_PROXY 是兜底：Docker 形态没有 config.json，
 // install.sh 只能通过 compose 传进来。数据库 setting 优先（可被页面改写），
@@ -81,7 +80,7 @@ func (s *Server) installProxy() string {
 	return strings.TrimSpace(os.Getenv("POJUN_INSTALL_PROXY"))
 }
 
-// maintenanceProxy 维护类出网（检查/下载更新、安装宿主工具）走哪个代理。
+// maintenanceProxy 维护类出网（检查/下载更新、宿主助手升级）走哪个代理。
 //
 // 优先「装机代理」——它本来就是为「连 GitHub 拉东西」准备的；老部署没配过它时
 // 回落到全局代理，保证行为不变。两者语义不同：全局代理是给**目标流量**隐藏源 IP
