@@ -43,22 +43,83 @@ url 可以是入口 HTML（提取 <script src>）或 .js 文件本体。
 每行输出一个 JSON 事件；最后一行 type=summary。仅标准库；
 http(s)_proxy 环境变量自动生效（流量走记录代理）；证书校验关闭（同 curl -k）。
 """
-import sys, os, json, re, base64, ssl, urllib.request, urllib.parse
+import sys, os, json, re, base64, ssl, zlib, urllib.request, urllib.parse
 
 MAX_BYTES = 3_000_000
 MAX_MAP_BYTES = 12_000_000
-UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
-      "Accept-Encoding": "identity"}
+# 目标侧身份：UA 与平台 http_request / poc_scaffold 逐字节一致（Windows x64 Chrome/131
+# 完整串），Accept 与 http_request 同为 */*；旧串缺 "(KHTML, like Gecko)"、版本只有两段，
+# 是全网唯一、可被目标侧跨请求关联的指纹。
+# Accept-Language / Accept-Encoding 是浏览器常规头，与 http_request 并不完全同形：
+# http_request 不发 Accept-Language，Accept-Encoding 由 Go transport 自动补成 gzip。
+# 这里按子资源抓取场景补齐 zh-CN 与 gzip/deflate，属于有意取舍（减少"同平台换工具"的
+# 可区分度，而不是与 http_request 头集合逐字节相同）。
+# Accept-Encoding 与 scheme 无关：Chrome 在 http/https 下都声明 br/zstd；stdlib 无法解码，
+# 故只声明 gzip/deflate 并由 _decode 真解压——明文目标上同样存在这处残留差异，与 TLS 无关。
+UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      "Accept": "*/*",
+      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+      "Accept-Encoding": "gzip, deflate"}
 
 _ctx = ssl.create_default_context()
 _ctx.check_hostname = False
 _ctx.verify_mode = ssl.CERT_NONE
 _opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=_ctx))
 
+def _gunzip_all(raw, cap):
+    # gzip 响应允许由多个成员拼接：decompressobj 只解第一个成员，其余留在 unused_data 里。
+    # 逐个成员解到耗尽，输出有界（cap+1）；流未正常结束（如服务端只 flush 未 finish）时
+    # 返回已解出的部分，与单次 decompress 的行为一致。
+    out, rest = b"", raw
+    while True:
+        d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        try:
+            out += d.decompress(rest, cap + 1 - len(out))
+        except zlib.error:
+            if out:
+                return out      # 后续成员损坏：保留已解出的成员，不影响首个成员
+            raise
+        if len(out) > cap:
+            return out[:cap + 1]
+        if not d.eof or not d.unused_data:
+            return out
+        rest = d.unused_data
+
+def _decode(raw, enc, cap):
+    # 按 Content-Encoding 解压；解压后最多取 cap+1 字节（有界，防解压炸弹）。
+    # 只声明 gzip/deflate：多值（如 "gzip, br"）、未知编码或数据损坏都无法还原，
+    # 显式发 warn 事件再返回原始字节——不能让调用方把乱码当正文静默扫描。
+    enc = (enc or "").strip().lower()
+    if enc in ("", "identity"):
+        return raw
+    if enc in ("gzip", "x-gzip"):
+        cands = (16 + zlib.MAX_WBITS,)
+    elif enc == "deflate":
+        # zlib 头流与"裸"deflate 流都有服务器在用，依次回落
+        cands = (zlib.MAX_WBITS, -zlib.MAX_WBITS)
+    else:
+        cands = ()
+    for wb in cands:
+        try:
+            if wb > zlib.MAX_WBITS:
+                out = _gunzip_all(raw, cap)
+            else:
+                out = zlib.decompressobj(wb).decompress(raw, cap + 1)
+        except zlib.error:
+            continue
+        if len(out) > cap:
+            emit({"type": "warn", "where": "decode", "encoding": enc,
+                  "note": "解压后超过读取上限，已截断到 %d 字节，后续扫描结果可能不完整" % cap})
+        return out
+    emit({"type": "warn", "where": "decode", "encoding": enc,
+          "note": "响应体无法解压（未声明的编码或数据损坏），后续扫描结果可能无效"})
+    return raw
+
 def fetch(url, cap=MAX_BYTES):
     req = urllib.request.Request(url, headers=UA)
     with _opener.open(req, timeout=15) as r:
-        return r.getcode(), r.read(cap + 1), r.geturl()
+        raw = r.read(cap + 1)
+        return r.getcode(), _decode(raw, r.headers.get("Content-Encoding"), cap), r.geturl()
 
 def emit(obj):
     print(json.dumps(obj, ensure_ascii=False))
@@ -372,7 +433,7 @@ func (t *ToolSet) jsAudit() actool.CoreTool {
 			return jsonResult(map[string]any{
 				"run_with_bash": fmt.Sprintf("python3 %s --out %s %s", script, out, strings.Join(quoted, " ")),
 				"count":         len(urls),
-				"note": "输出每行一个 JSON 事件（html/js/sourcemap/secrets/endpoints/summary）。" +
+				"note": "输出每行一个 JSON 事件（html/js/sourcemap/secrets/endpoints/warn/summary）。" +
 					"sourcemap found=true → CWE-540：还原源码落盘在 --out 目录，save_evidence 后报 high；" +
 					"secrets 有真实凭据 → critical；endpoints 照常 record_fact 并按 api-security-testing 继续。",
 			})
