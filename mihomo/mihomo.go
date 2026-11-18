@@ -378,6 +378,10 @@ func (m *Manager) writeConfig(yamlText string, port int, opts StartOptions) (str
 	delete(cfg, "rule-providers")
 	delete(cfg, "sub-rules")
 	delete(cfg, "tun")
+	// listeners 是与 mixed-port 平行的独立监听数组（每项自带 listen/port）。
+	// 不删掉的话，恶意订阅可注入 listen: 0.0.0.0 的 socks listener——
+	// bind-address/allow-lan 只约束 mixed-port，管不到这里（审计 B4）。
+	delete(cfg, "listeners")
 	cfg["geodata-mode"] = false
 	cfg["geo-auto-update"] = false
 	cfg["mode"] = "rule"
