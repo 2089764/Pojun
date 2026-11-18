@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/chu0119/pojun/db"
+	"github.com/chu0119/pojun/traffic"
 )
 
 // diagQuery 执行一条只读查询并把结果转成 []map[string]any（列名 → 值）。
@@ -55,6 +56,12 @@ func (s *Server) diagSettings() map[string]any {
 	out := make(map[string]any, len(raw)+1)
 	for k, v := range raw {
 		out[k] = v
+	}
+	// 代理 URL 可能带 user:pass；诊断包会被用户转发给开发，平台自身凭据必须掩码。
+	for _, k := range []string{"global_proxy", "web_search_proxy", "install_proxy"} {
+		if v, ok := out[k].(string); ok && v != "" {
+			out[k] = maskProxyURL(v)
+		}
 	}
 	out["proxypool_allow_socks5"] = s.socks5Allowed()
 	return out
@@ -364,7 +371,13 @@ func (s *Server) diagProxyPool() map[string]any {
 	out["global_proxy_set"] = s.m.GlobalProxy() != ""
 	out["capturing"] = s.m.TrafficEnabled()
 	out["usable"] = s.m.traffic.ProxyPoolAvailable()
-	out["entries"] = st.Entries // 明文 URL：诊断包按用户要求全量导出
+	// 条目 URL 同样掩码 user:pass（诊断包可能被转发；平台自身凭据不导出）。
+	masked := make([]traffic.PoolEntry, len(st.Entries))
+	copy(masked, st.Entries)
+	for i := range masked {
+		masked[i].URL = maskProxyURL(masked[i].URL)
+	}
+	out["entries"] = masked
 	return out
 }
 
