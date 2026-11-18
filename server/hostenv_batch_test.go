@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -11,6 +12,9 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/chu0119/pojun/hostd"
+	"github.com/chu0119/pojun/hosttools"
 )
 
 // startFakeHostd 在临时 unix socket 上起一个最小 hostd 替身：
@@ -103,6 +107,20 @@ func TestHostenvInstallBatch(t *testing.T) {
 	}
 	if reasons["sqlmap"] == "" {
 		t.Fatal("sqlmap 被助手拒绝时应带回原因")
+	}
+}
+
+func TestHostenvMirror(t *testing.T) {
+	t.Setenv("POJUN_HOSTD_SOCKET", startFakeHostd(t))
+	s := &Server{}
+	tool := hosttools.Tool{ID: "nmap", Kind: hosttools.KindApt}
+	_, code, err := s.forwardHostInstall(context.Background(), tool, "", hostd.InstallSources{APT: "tencent"})
+	if err != nil || code != http.StatusConflict {
+		t.Fatalf("selected mirror should require a compatible helper: %d %v", code, err)
+	}
+	_, code, err = s.forwardHostInstall(context.Background(), tool, "", hostd.InstallSources{})
+	if err != nil || code != http.StatusOK {
+		t.Fatalf("default install should still work with the older helper: %d %v", code, err)
 	}
 }
 

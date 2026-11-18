@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chu0119/pojun/hostd"
 	"github.com/chu0119/pojun/hosttools"
 	"github.com/chu0119/pojun/proxyprobe"
 	"github.com/chu0119/pojun/selfupdate"
@@ -95,15 +96,60 @@ func (s *Server) maintenanceProxy() string {
 	return s.m.GlobalProxy()
 }
 
+const settingHostInstallSources = "host_install_sources"
+
+func (s *Server) hostInstallSources() (hostd.InstallSources, error) {
+	var sources hostd.InstallSources
+	if s.m == nil || s.m.pg == nil {
+		return sources, nil
+	}
+	raw, ok, err := s.m.pg.GetSetting(settingHostInstallSources)
+	if err != nil || !ok || raw == "" {
+		return sources, err
+	}
+	if err := json.Unmarshal([]byte(raw), &sources); err != nil {
+		return sources, err
+	}
+	return sources, sources.Validate()
+}
+
+func (s *Server) hostenvSaveSources(w http.ResponseWriter, r *http.Request) {
+	var sources hostd.InstallSources
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&sources); err != nil {
+		writeErr(w, http.StatusBadRequest, "安装源设置格式错误")
+		return
+	}
+	if err := sources.Validate(); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if s.m == nil || s.m.pg == nil {
+		writeErr(w, http.StatusServiceUnavailable, "设置存储不可用")
+		return
+	}
+	raw, _ := json.Marshal(sources)
+	if err := s.m.pg.SetSetting(settingHostInstallSources, string(raw)); err != nil {
+		writeErr(w, http.StatusInternalServerError, "保存安装源设置失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, sources)
+}
+
 // hostenvStatus 体检页的总入口:工具清单 + 是否支持一键安装。
 func (s *Server) hostenvStatus(w http.ResponseWriter, r *http.Request) {
-	ver, present := s.hostdVersion(r.Context())
+	sources, err := s.hostInstallSources()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "读取安装源设置失败")
+		return
+	}
+	info, present := s.hostdInfo(r.Context())
+	ver := info.Version
 	reason := ""
 	if !present {
 		reason = "宿主助手未运行（未安装 pojun-hostd，或当前是 Docker 部署）"
 	}
 	writeJSON(w, 200, map[string]any{
-		"tools": hosttools.Inventory(),
+		"tools":       hosttools.Inventory(),
 		"deploy_mode": deployMode(),
 		"installer": map[string]any{
 			"available": present,
@@ -111,9 +157,11 @@ func (s *Server) hostenvStatus(w http.ResponseWriter, r *http.Request) {
 			"version":   ver,
 			// 老助手（0.3.22 之前）既不上报版本也没有 /self-upgrade，自己换不了装，
 			// 需要运维重跑一次 install.sh 引导；之后就能自动跟随主程序升级。
-			"upgrade_required": present && ver == "",
-			"socket":           hostdSocket(),
-			"proxy":            s.installProxy(), // 回显当前安装代理,前端可编辑
+			"upgrade_required":  present && ver == "",
+			"socket":            hostdSocket(),
+			"proxy":             s.installProxy(),
+			"sources":           sources,
+			"sources_supported": info.InstallSources,
 		},
 	})
 }
@@ -132,15 +180,17 @@ func (s *Server) hostenvInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 白名单在主服务侧先挡一道(助手侧还会再挡),避免无谓的跨进程调用。
-	if _, ok := hosttools.Lookup(req.ID); !ok {
+	tool, ok := hosttools.Lookup(req.ID)
+	if !ok {
 		writeErr(w, 400, "未知工具: "+req.ID)
 		return
 	}
-	payload, _ := json.Marshal(map[string]string{
-		"tool_id": req.ID,
-		"proxy":   s.installProxy(),
-	})
-	body, code, err := s.hostdCall(r.Context(), http.MethodPost, "/jobs", payload)
+	sources, err := s.hostInstallSources()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "读取安装源设置失败")
+		return
+	}
+	body, code, err := s.forwardHostInstall(r.Context(), tool, s.installProxy(), sources)
 	if err != nil {
 		writeErr(w, 503, err.Error())
 		return
@@ -148,6 +198,23 @@ func (s *Server) hostenvInstall(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_, _ = w.Write(body)
+}
+
+func (s *Server) forwardHostInstall(ctx context.Context, tool hosttools.Tool, proxy string, sources hostd.InstallSources) ([]byte, int, error) {
+	path := "/jobs"
+	if tool.Kind == hosttools.KindApt && sources.APT != "" || tool.Kind == hosttools.KindPip && sources.PyPI != "" {
+		path = "/jobs/with-sources"
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"tool_id": tool.ID,
+		"proxy":   proxy,
+		"sources": sources,
+	})
+	body, code, err := s.hostdCall(ctx, http.MethodPost, path, payload)
+	if err == nil && code == http.StatusNotFound && path == "/jobs/with-sources" {
+		return []byte(`{"error":"宿主助手版本不支持安装源选项，请升级助手或恢复系统默认源"}`), http.StatusConflict, nil
+	}
+	return body, code, err
 }
 
 // hostenvInstallBatch 批量发起安装——「一键装齐」的后端。
@@ -173,6 +240,11 @@ func (s *Server) hostenvInstallBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	proxy := s.installProxy()
+	sources, err := s.hostInstallSources()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "读取安装源设置失败")
+		return
+	}
 	type jobOK struct {
 		JobID  string `json:"job_id"`
 		ToolID string `json:"tool_id"`
@@ -190,12 +262,12 @@ func (s *Server) hostenvInstallBatch(w http.ResponseWriter, r *http.Request) {
 			continue // 空项与重复项静默跳过
 		}
 		seen[id] = true
-		if _, ok := hosttools.Lookup(id); !ok {
+		tool, ok := hosttools.Lookup(id)
+		if !ok {
 			skipped = append(skipped, skip{ToolID: id, Reason: "未知工具"})
 			continue
 		}
-		payload, _ := json.Marshal(map[string]string{"tool_id": id, "proxy": proxy})
-		body, code, err := s.hostdCall(r.Context(), http.MethodPost, "/jobs", payload)
+		body, code, err := s.forwardHostInstall(r.Context(), tool, proxy, sources)
 		if err != nil {
 			// 助手整体不可用：没必要继续打剩下的一定也失败。
 			writeErr(w, 503, err.Error())
@@ -326,19 +398,28 @@ func errConnectHostd(err error) error {
 // 0.3.22 才加的，所以这种助手必然早于 0.3.22，也就**没有 /self-upgrade**，
 // 无法自我换装，只能由运维重跑一次 install.sh 引导上来。
 func (s *Server) hostdVersion(ctx context.Context) (version string, present bool) {
+	info, present := s.hostdInfo(ctx)
+	return info.Version, present
+}
+
+type hostdInfo struct {
+	Version        string `json:"version"`
+	InstallSources bool   `json:"install_sources"`
+}
+
+func (s *Server) hostdInfo(ctx context.Context) (hostdInfo, bool) {
 	if body, code, err := s.hostdCall(ctx, http.MethodGet, "/version", nil); err == nil && code == http.StatusOK {
-		var v struct {
-			Version string `json:"version"`
-		}
-		if json.Unmarshal(body, &v) == nil && strings.TrimSpace(v.Version) != "" {
-			return strings.TrimSpace(v.Version), true
+		var info hostdInfo
+		if json.Unmarshal(body, &info) == nil {
+			info.Version = strings.TrimSpace(info.Version)
+			if info.Version != "" || info.InstallSources {
+				return info, true
+			}
 		}
 	}
 	// 回退 /healthz：老版本有它、没有 /version。能应答就说明助手在。
-	if _, code, err := s.hostdCall(ctx, http.MethodGet, "/healthz", nil); err == nil && code == http.StatusOK {
-		return "", true
-	}
-	return "", false
+	_, code, err := s.hostdCall(ctx, http.MethodGet, "/healthz", nil)
+	return hostdInfo{}, err == nil && code == http.StatusOK
 }
 
 // StartHostdReconcile 在后台把助手版本对齐到主程序版本。

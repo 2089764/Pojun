@@ -1778,6 +1778,13 @@ export interface HostTool {
   category: "network" | "dns" | "web" | "cred" | "code" | "pivot" | "oob" | "exploit" | "material" | "runtime" | "middleware" | "";
 }
 
+export type InstallSourcePreset = "" | "tencent" | "tuna";
+
+export interface HostInstallSources {
+  apt: InstallSourcePreset;
+  pypi: InstallSourcePreset;
+}
+
 /** 一键安装是否可用，取决于特权助手 pojun-hostd 是否在线（Docker 部署下不在线）。 */
 export interface HostenvInstaller {
   available: boolean;
@@ -1788,6 +1795,8 @@ export interface HostenvInstaller {
   upgrade_required?: boolean;
   socket: string;
   proxy: string;
+  sources?: HostInstallSources;
+  sources_supported?: boolean;
 }
 
 export interface HostenvStatus {
