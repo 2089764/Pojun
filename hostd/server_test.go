@@ -69,3 +69,27 @@ func TestHealthz(t *testing.T) {
 		t.Errorf("healthz 响应异常: %s", w.Body.String())
 	}
 }
+
+// 审计 B9：自我换装拒绝降级目标——助手版本高于目标 tag 时 400，不被主程序的
+// 版本对齐循环（可能跑在被手动回滚的主程序上）拽回旧版。
+func TestSelfUpgradeRejectsDowngrade(t *testing.T) {
+	srv := NewServer(context.Background(), log.New(io.Discard, "", 0))
+	srv.Version = "v0.4.89"
+	post := func(tag string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]string{"tag": tag})
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/self-upgrade", bytes.NewReader(body)))
+		return w
+	}
+	if w := post("v0.4.88"); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "拒绝降级") {
+		t.Fatalf("降级请求应 400：code=%d body=%s", w.Code, w.Body.String())
+	}
+	// 升级与同版本仍然放行（走到下载前的最后一关——这里换装CAS抢锁后 202 即返回）。
+	if w := post("v0.4.90"); w.Code != http.StatusAccepted {
+		t.Fatalf("升级请求应放行 202：code=%d body=%s", w.Code, w.Body.String())
+	}
+	// 上面 202 已占用 upgrading 锁，清理：直接等 CAS 恢复（goroutine 会下载失败）。
+	for i := 0; i < 100 && !srv.upgrading.CompareAndSwap(true, false); i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+}

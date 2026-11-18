@@ -113,6 +113,22 @@ func TestInstallFromURLVerifiesSHA(t *testing.T) {
 	}
 }
 
+// 审计 B8：远程 URL 安装缺 sha256 必须直接拒绝（供应链投毒防线），
+// 不再「先装上再人工比对」。
+func TestInstallFromURLRequiresSHA(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(gzBytes(t, []byte("mihomo-binary")))
+	}))
+	defer srv.Close()
+	m := New(t.TempDir())
+	if _, err := m.InstallFromURL(context.Background(), srv.URL+"/mihomo-linux-amd64-v1.gz", "  ", ""); err == nil {
+		t.Fatalf("URL 安装缺 sha256 应被拒绝")
+	}
+	if _, err := os.Stat(filepath.Join(m.Dir(), "mihomo")); !os.IsNotExist(err) {
+		t.Fatalf("拒绝后不应留下二进制")
+	}
+}
+
 // 服务端忽略 Range 时（返回 200）必须从头写，不能把两段数据拼坏。
 func TestDownloadResumableIgnoresRange(t *testing.T) {
 	payload := bytes.Repeat([]byte("A"), 4096)

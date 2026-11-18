@@ -27,6 +27,7 @@ import (
 
 	"github.com/chu0119/pojun/hosttools"
 	"github.com/chu0119/pojun/proxyprobe"
+	"github.com/chu0119/pojun/selfupdate"
 )
 
 // State 任务状态。
@@ -735,6 +736,13 @@ func (s *Server) Handler() http.Handler {
 		}
 		if !ValidVersionTag(req.Tag) {
 			writeJSON(w, 400, map[string]any{"error": "版本号格式非法: " + req.Tag})
+			return
+		}
+		// 审计 B9：拒绝降级。换装到更低版本只允许通过重跑 install.sh 显式完成——
+		// 版本对齐请求来自主程序，主程序自身可能被手动降级/回滚，自动把助手也
+		// 拽回旧版等于把已知修复静默撤销。
+		if cmp, comparable := selfupdate.CompareVersions(s.Version, req.Tag); comparable && cmp > 0 {
+			writeJSON(w, 400, map[string]any{"error": fmt.Sprintf("拒绝降级：助手当前 %s 高于目标 %s；确需降级请重跑 install.sh", s.Version, req.Tag)})
 			return
 		}
 		cleanProxy, err := ValidateProxy(req.Proxy)

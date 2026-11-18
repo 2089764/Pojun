@@ -312,6 +312,10 @@ export const api = {
   changePassword: (oldPassword: string, newPassword: string) =>
     post<{ ok: boolean }>("/auth/change-password", { old_password: oldPassword, new_password: newPassword }),
 
+  // ---- 会话吊销（审计 B1）----
+  revokeAllSessions: () => post<{ ok: boolean; revoked_before: number }>("/sessions/revoke-all", { confirm: true }),
+  revokeCurrentSession: () => post<{ ok: boolean }>("/sessions/revoke-current", {}),
+
   // ---- tasks ----
   tasks: () =>
     get<{ tasks: Task[]; active: string }>("/tasks").then((r) => ({ tasks: arr(r.tasks), active: r.active ?? "" })),

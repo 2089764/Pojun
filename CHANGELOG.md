@@ -4,6 +4,50 @@
 
 ## [Unreleased]
 
+## [0.4.89] - 2026-11-19
+### 安全（审计修复批二：B1 短期缓解 + B8/B9 + F5/F6 + issue #21.2）
+
+- **B1 会话吊销机制**：JWT 签发带 `jti`（16 字节随机）；新增「吊销全部会话」
+  （settings 哨兵时间戳，iat 早于它的 token 全部失效——含无 jti 的历史 token）
+  与「吊销当前会话」（按 jti 精确失效，不牵连其他设备）。此前唯一踢会话手段是
+  改密码轮 key。校验挂在 requireAuth，内存缓存 30s TTL 从 settings 刷新，
+  写端点主动更新；settings 读失败沿用旧值放行（fail-open，纵深防御不挡正常请求）。
+  旧 token（无 jti）不能逐个吊销，由哨兵覆盖。
+- **B1 管理面二次确认**：吊销全部会话要求请求体显式 `{"confirm":true}`，缺则 400；
+  前端侧边栏新增「吊销全部会话」红色菜单项 + AlertDialog 确认弹窗，成功后清
+  本地 token 跳登录页。同秒边界按 fail-closed 处理（吊销时点及同秒签发的 token
+  一律失效，重新登录即恢复）。
+- **B9 hostd 拒绝降级**：助手 `/self-upgrade` 在目标 tag 低于当前版本时 400 拒绝
+  （此前只校验格式，任何合法 tag 都会换装）；主程序版本对齐循环发现助手版本
+  高于自己时跳过并提示重跑 install.sh——主程序被手动回滚时不再把助手一起拽回
+  旧版静默撤销已知修复。
+- **B8 mihomo 远程 URL 安装强制 sha256**：任意 http(s) 安装源不再接受「先装上
+  再人工比对哈希」——投毒的二进制已经执行过一次了。缺 sha256 直接拒绝（前端
+  输入框必填校验同步）；离线场景走「从服务器文件安装」（运维本地文件可控，
+  保持可选）；官方+镜像链路本来就带 GitHub API 哈希强校验，不受影响。
+- **F5 llm 池非转移失败不清零**：`Complete` 的非转移错误（ctx 取消/确定性 4xx）
+  此前调 `Pass()` 把累计失败计数洗掉——每次都撞 401 的坏配置永远攒不起 trip 计数；
+  改为只交付错误、记账原地保留，与 Stream 非转移路径对齐。
+- **F6 llm 池中流失败计 Trip**：流式输出中途失败（部分内容已交付、无法转移）
+  此前完全不入账，坏节点攒不起熔断计数；现在 failover-eligible 的中流失败照常
+  `Trip` 记账（ctx 取消是调用方停读，不计）。
+- **issue #21.2 脚本正文可见性**：审查输入（ReviewInput v5）新增 `scripts` 字段——
+  工具命令引用的本地脚本文件（解释器后第一个非选项参数 / 带脚本扩展名的 token）
+  读出正文快照附给兜底 Judge，`python3 shared/scripts/exp.py` 这类命令不再只让
+  审查层看到文件名。限额：最多 4 个文件、单文件/总计 32KB/128KB；只读普通文件
+  （设备/管道/目录跳过，防 PreToolUse 挂死）；含变量/通配的动态路径进
+  `unresolved_scripts` 由 Judge 按内容不可见口径保守处理。Judge 提示词同步更新。
+
+### 测试
+
+- `server/auth_revoke_test.go`：jti 唯一性、revoke-all（confirm 缺失 400 / 旧 token
+  与历史无 jti token 失效 / 跨秒新 token 存活）、revoke-current（精确失效不牵连）。
+- `hostd/server_test.go`：降级 tag 400、升级 tag 放行。
+- `mihomo/install_sources_test.go`：URL 安装缺 sha256 拒绝且不留二进制。
+- `llmpool/pool_test.go`：中流硬失败立即 trip、Complete 非转移失败不清零。
+- `intercept/review_context_test.go`：脚本正文注入（静态提取/动态路径 unresolved/
+  非普通文件跳过）。
+
 ## [0.4.88] - 2026-11-19
 ### 变更
 

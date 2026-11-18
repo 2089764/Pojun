@@ -53,6 +53,10 @@ type Server struct {
 	keyDir   string       // directory holding jwt.key (next to the executable)
 	dataDir  string       // browsable workspace root
 	jwtKey   atomic.Value // HS256 signing key ([]byte); replaceable to revoke sessions
+	// revokeCache 是会话吊销状态（审计 B1）：哨兵 iat + jti 集合的内存缓存，
+	// 30s TTL 从 settings 刷新；首次使用时惰性初始化。
+	revokeCache     *revocationCache
+	revokeCacheOnce sync.Once
 
 	// 文档预览（v0.4.21）：Office/PDF 取样转图片，单 worker 串行（LibreOffice
 	// 的 UserInstallation 不能并发），queue 只放 artifact id。
@@ -730,6 +734,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/auth/init", s.authInit)
 	mux.HandleFunc("POST /api/auth/login", s.authLogin)
 	mux.HandleFunc("POST /api/auth/change-password", s.authChangePassword)
+
+	// 会话管理（审计 B1）— 默认走全局 JWT 鉴权 + 吊销检查
+	mux.HandleFunc("POST /api/sessions/revoke-all", s.sessionRevokeAll)
+	mux.HandleFunc("POST /api/sessions/revoke-current", s.sessionRevokeCurrent)
 
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("GET /api/stats", s.stats)

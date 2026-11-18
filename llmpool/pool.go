@@ -91,16 +91,24 @@ func (p *Pool) Stream(ctx context.Context, req llm.CompletionRequest) iter.Seq2[
 					failed = err
 					break // safe window: nothing reached the caller yet
 				}
+				if err != nil {
+					// 审计 F6：中流失败也要计入熔断记账——部分输出已交付、无法
+					// 转移，但失败事实不能丢，否则坏节点永远攒不起 trip 计数。
+					// 只记 failover-eligible 的失败：ctx 取消是调用方停读，不是
+					// provider 之过；确定性 4xx 与转移路径同样不计。
+					if shouldFailover(ctx, err) && p.health.Trip(m.ID, trimErr(err), isHardFailure(err)) {
+						log.Printf("[llmpool] 配置 %q(%s) 已熔断：%s", m.Name, m.Model, trimErr(err))
+					}
+					_ = yield(ev, err) // 终态错误交付调用方收尾
+					return
+				}
 				emitted = true
 				if !yield(ev, err) {
 					return // caller stopped consuming (cancel / early exit)
 				}
-				if err != nil {
-					return // terminal error already handed to the caller
-				}
 			}
 			if failed == nil {
-				p.health.Pass(m.ID) // completed (or failed in a non-failover way)
+				p.health.Pass(m.ID) // completed cleanly（中流失败走上面的 Trip，不清零）
 				return
 			}
 			lastErr = failed
@@ -137,9 +145,9 @@ func (p *Pool) Complete(ctx context.Context, req llm.CompletionRequest) (llm.Mes
 			return msg, sr, usage, nil
 		}
 		if !shouldFailover(ctx, err) {
-			// Non-failover error (e.g. ctx cancel, deterministic 4xx): surface as-is
-			// without tripping health, matching Stream's non-failover path.
-			p.health.Pass(m.ID)
+			// 审计 F5：非转移失败不清零——ctx 取消 / 确定性 4xx 不该把累计的
+			// 失败计数洗掉（每次请求都撞 401 的坏配置将永远攒不起 trip 计数）。
+			// 与 Stream 的非转移路径对齐：只交付错误，记账原地保留。
 			return llm.Message{}, "", llm.Usage{}, err
 		}
 		lastErr = err

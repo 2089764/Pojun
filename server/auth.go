@@ -235,24 +235,36 @@ func loginGuard(w http.ResponseWriter, r *http.Request, action string) bool {
 	return true
 }
 
-// signJWT issues a 7-day HS256 token for user POJUN.
+// signJWT issues a 7-day HS256 token for user POJUN. jti（审计 B1）是会话标识：
+// 「吊销当前会话」按它精确失效，不牵连其他设备的登录。
 func signJWT(key []byte) (string, error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate jti: %w", err)
+	}
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
 		Subject:   "POJUN",
+		ID:        hex.EncodeToString(buf),
 		ExpiresAt: jwt.NewNumericDate(time.Now().Add(jwtTTL)),
 		IssuedAt:  jwt.NewNumericDate(time.Now()),
 	}).SignedString(key)
 }
 
-// verifyJWT returns true when tokenStr is a valid, non-expired HS256 token.
-func verifyJWT(tokenStr string, key []byte) bool {
-	t, err := jwt.Parse(tokenStr, func(t *jwt.Token) (any, error) {
+// parseJWT validates signature/expiry and returns the parsed token (iat/jti
+// claim accessors live in auth_revoke.go).
+func parseJWT(tokenStr string, key []byte) (*jwt.Token, error) {
+	return jwt.Parse(tokenStr, func(t *jwt.Token) (any, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method")
 		}
 		return key, nil
 	})
-	return err == nil && t.Valid
+}
+
+// verifyJWT returns true when tokenStr is a valid, non-expired HS256 token.
+func verifyJWT(tokenStr string, key []byte) bool {
+	_, err := parseJWT(tokenStr, key)
+	return err == nil
 }
 
 // sseQueryTokenPaths 是唯一接受 ?token= 查询参数的端点白名单：浏览器 EventSource
@@ -308,8 +320,15 @@ func (s *Server) requireAuth(h http.Handler) http.Handler {
 			writeErr(w, 401, "未授权")
 			return
 		}
-		if !verifyJWT(tok, s.currentJWTKey()) {
+		key := s.currentJWTKey()
+		if !verifyJWT(tok, key) {
 			writeErr(w, 401, "token 无效或已过期")
+			return
+		}
+		// 审计 B1：签名/过期之外再查会话吊销（哨兵 iat / jti 集合，内存缓存）。
+		iat, jti, _ := parseTokenClaims(tok, key)
+		if s.revocations().revoked(jti, iat) {
+			writeErr(w, 401, "会话已被吊销，请重新登录")
 			return
 		}
 		h.ServeHTTP(w, r)

@@ -155,8 +155,11 @@ func (m *Manager) InstallFromFile(src string) (InstallResult, error) {
 }
 
 // InstallFromURL 从任意可访问的 URL 安装（内网镜像/自建文件服务）。支持断点续传
-// 与多次重试；给了 sha256 就强校验。注意：官方 GitHub 资产地址在受限网络里可能
-// 永远连不上——那属于网络策略，改用镜像或本地上传即可。
+// 与多次重试。审计 B8：远程 URL 安装必须提供 sha256 并强校验——任意可写的
+// 下载源是典型的供应链投毒入口，「先装上再人工比对哈希」时投毒的二进制已经
+// 执行过一次了。离线拷贝（InstallFromFile）不走这条限制，运维本地文件可控。
+// 注意：官方 GitHub 资产地址在受限网络里可能永远连不上——那属于网络策略，
+// 改用镜像（自带官方哈希）或本地上传即可。
 func (m *Manager) InstallFromURL(ctx context.Context, rawURL, wantSHA, proxyURL string) (InstallResult, error) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
@@ -165,6 +168,9 @@ func (m *Manager) InstallFromURL(ctx context.Context, rawURL, wantSHA, proxyURL 
 	u, err := url.Parse(rawURL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return InstallResult{}, fmt.Errorf("只支持 http/https 安装包地址: %s", rawURL)
+	}
+	if strings.TrimSpace(wantSHA) == "" {
+		return InstallResult{}, errors.New("远程 URL 安装必须提供 sha256（64 位十六进制）：先在可信环境取到安装包哈希再安装；离线场景请改用「从服务器文件安装」")
 	}
 	if err := m.ensureWritable(); err != nil {
 		return InstallResult{}, err

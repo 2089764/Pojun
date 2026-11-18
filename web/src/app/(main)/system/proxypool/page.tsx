@@ -218,6 +218,11 @@ export default function ProxyPoolPage() {
 
   // 从镜像 URL / 服务器本地文件安装。官方 GitHub 资产在受限网络会 60s 超时。
   const installMihomoFrom = async (mode: "url" | "path") => {
+    if (mode === "url" && !installSHA.trim()) {
+      // 审计 B8：远程 URL 安装必须带 sha256 强校验（后端同样强制）。
+      toast.error("远程 URL 安装必须提供 sha256（先在可信环境取到安装包哈希）；离线场景请改用「从服务器文件安装」", { duration: 10000 });
+      return;
+    }
     setMihomoBusy(true);
     try {
       const r = await api.proxyPoolMihomoInstall(
@@ -653,7 +658,7 @@ export default function ProxyPoolPage() {
                           <Input
                             value={installSHA}
                             onChange={(e) => setInstallSHA(e.target.value)}
-                            placeholder="sha256（可选，强烈建议；镜像来源务必填）"
+                            placeholder="sha256（URL 安装必填，64 位十六进制）"
                             className="h-8 font-mono text-[11px]"
                           />
                           <Button
